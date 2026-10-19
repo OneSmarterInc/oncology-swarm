@@ -43,7 +43,7 @@ for _field, _keys in {
                   "availableservice", "focusareas", "services"],
     "awards": ["awards", "award", "achievements", "honours", "honors"],
     "education": ["education", "alumniof", "training", "fellowships", "educationdetails"],
-    "email": ["email", "emailid", "emailaddress"],
+    "email": ["email", "emailid", "emailaddress", "doctoremail", "mail"],
     "phone": ["telephone", "phone", "mobile", "contactnumber", "phonenumber", "contact"],
     "registration": ["registrationnumber", "regno", "registrationno", "mciregistration", "nmcregistration", "medicalregistration"],
     "opd_timings": ["opdtimings", "timings", "schedule", "availability", "opdtiming", "slots", "opdschedule"],

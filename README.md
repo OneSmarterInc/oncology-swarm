@@ -21,7 +21,7 @@ Or double-click `setup_windows.bat`. The last line downloads Chromium (about 150
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expect `25 passed`.
+Expect `29 passed`.
 
 Then try the fictional demo hospital. Window 1:
 
@@ -61,6 +61,22 @@ Open http://127.0.0.1:8000/, paste a URL, click **Start crawl**, watch progress,
 
 Use `.\.venv\Scripts\python.exe` in place of `python` on Windows. Press Ctrl+C to stop a crawl early; what was found is still saved.
 
+## Crawl many hospitals at once
+
+`sources/india_hospitals.csv` lists official hospital and cancer-centre doctor pages. One command crawls them all, one by one, each with its own page budget:
+
+```powershell
+.\.venv\Scripts\python.exe -m oncoscraper batch sources\india_hospitals.csv --out india_oncologists.xlsx
+```
+
+| Option | Meaning |
+|---|---|
+| `--pages-per-site 150` | page budget per hospital (default 150) |
+| `--only Apollo` | run only hospitals whose name contains "Apollo" |
+| `--no-resume` | re-crawl hospitals that already finished |
+
+Each finished hospital is saved in `india_oncologists_sites\`. If the run stops (Ctrl+C, power cut), run the same command again and it continues from the next hospital. The Excel file gets a **Hospitals** sheet with pages, doctors, oncologists and emails found per hospital. Add your own rows to the CSV; only one URL column is needed.
+
 ## Which URL to give it
 
 Best to worst:
@@ -96,9 +112,18 @@ Oncology is decided from specialty, department, designation and sub-specialty (M
 | Evidence | each field, which layer found it, the page text, the URL |
 | Pages | every URL visited, HTTP status, page type |
 
-Columns: name, designation, specialty, sub-specialties, department, qualifications, experience, hospital, city, languages, expertise, OPD timings, consultation fee, registration, phone, email, education, awards, about, photo URL, profile URL, found-on pages, oncology score.
+Columns: name, designation, specialty, sub-specialties, department, qualifications, experience, hospital, city, languages, expertise, OPD timings, consultation fee, registration, phone, email, contact email, education, awards, about, photo URL, source hospital, profile URL, found-on pages, oncology score.
 
-Phone and email are taken only from explicit labels or `tel:`/`mailto:` links in the page body, never from the site header or footer. Registration numbers are what the hospital page claims; they are not checked against the NMC register.
+**Emails.** The scraper collects every email the page publishes in its body: plain text, `mailto:` links, Cloudflare-protected addresses (shown as "[email protected]" in the browser), and written-out forms like `name [at] hospital [dot] com`. It never guesses addresses from name patterns. Each address goes in one of two columns:
+
+| Column | Gets | Example |
+|---|---|---|
+| Email | the doctor's own address: contains their name, or is the only non-desk address on their page or card | `meenu.walia@hospital.in` |
+| Contact Email | desk and department addresses shown on the doctor's page | `appointments@`, `oncology@`, `info@` |
+
+Many hospital profile pages publish no email at all; then both columns stay empty.
+
+Phone numbers are taken only from explicit labels or `tel:` links in the page body. Header and footer contacts (the hospital switchboard) are ignored. Registration numbers are what the hospital page claims; they are not checked against the NMC register.
 
 ## Rules it follows
 
@@ -132,7 +157,9 @@ oncoscraper/
   oncology.py   oncology relevance score
   vocab.py      degrees, designations, cities, languages, labels, URL hints
   templates.py  optional per-site selectors
+  emails.py     published, Cloudflare-protected and obfuscated emails; doctor vs desk
+  batch.py      many hospitals from a CSV, per-site budget and resume
   export.py     Excel / CSV / JSON
   web.py        local web UI (static/index.html)
-tests/          fictional hospital site, firewall simulator, 25 tests
+tests/          fictional hospital site, firewall simulator, 29 tests
 ```

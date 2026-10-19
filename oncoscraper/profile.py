@@ -6,6 +6,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
+from . import emails
 from .annotate import Line, annotate
 from .models import LIST_FIELDS, DoctorRecord
 from .vocab import (
@@ -108,6 +109,22 @@ def name_from_url(url: str) -> str | None:
 
 
 # --------------------------------------------------------------------------
+def assign_emails(rec: DoctorRecord, addrs: list[str], layer: str, snippet: str, url: str,
+                  single_doctor: bool = True) -> None:
+    """Doctor's own address -> email; desk/department addresses -> contact_email."""
+    if not addrs:
+        return
+    own, other = emails.classify(addrs, rec.get("name"), single_doctor)
+    if own:
+        rec.set("email", "; ".join(own), layer, snippet, url)
+    if other:
+        existing = rec.get("contact_email")
+        merged = list(dict.fromkeys(([existing] if existing else []) + other))
+        rec.values.pop("contact_email", None)
+        rec.layers.pop("contact_email", None)
+        rec.set("contact_email", "; ".join(merged), layer, snippet, url)
+
+
 def find_name_in_text(text: str) -> str | None:
     m = NAME_RE.search(text)
     if not m:
@@ -268,10 +285,8 @@ def _assign(rec: DoctorRecord, f: str, value: str, layer: str, snippet: str, url
         m = re.search(r"[\d,]{2,7}", value)
         if m:
             rec.set(f, m.group(0).replace(",", ""), layer, snippet, url)
-    elif f == "email":
-        m = EMAIL_RE.search(value)
-        if m:
-            rec.set(f, m.group(0), layer, snippet, url)
+    elif f in ("email", "contact_email"):
+        assign_emails(rec, emails.find(value), layer, snippet, url)
     elif f == "phone":
         m = PHONE_RE.search(value)
         if m and sum(c.isdigit() for c in m.group(0)) >= 8:
@@ -365,13 +380,10 @@ def patterns(rec: DoctorRecord, lines: list[Line], name_idx: int, main: Tag, url
                     rec.set("languages", langs, "patterns", l.text, url)
                     break
 
-    # Contacts: only explicit links inside the main content.
-    if "email" not in rec.values:
-        a = main.find("a", href=re.compile(r"^mailto:", re.I))
-        if a:
-            email = a["href"][7:].split("?")[0]
-            if EMAIL_RE.fullmatch(email):
-                rec.set("email", email, "patterns", str(a)[:200], url)
+    # Emails: mailto links and any address written in the page body (footer already removed).
+    found = emails.from_links(main) + emails.find(full_text)
+    if found:
+        assign_emails(rec, list(dict.fromkeys(found)), "patterns", "; ".join(found)[:300], url)
     if "phone" not in rec.values:
         a = main.find("a", href=re.compile(r"^tel:", re.I))
         if a:

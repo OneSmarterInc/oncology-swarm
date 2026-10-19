@@ -6,11 +6,12 @@ from urllib.parse import urljoin, urlsplit
 
 from bs4 import Tag
 
+from . import emails
 from .dom import text_lines
 from .fetch import normalize_url
 from .models import DoctorRecord
 from .profile import (
-    city_from, find_name_in_text, parse_experience, parse_qualifications, plain_person_name,
+    assign_emails,     city_from, find_name_in_text, parse_experience, parse_qualifications, plain_person_name,
     qualification_line, split_designation, sub_specialties,
 )
 from .vocab import HOSPITAL_WORDS, LANG_RE, NAME_RE, PROFILE_URL_HINTS, label_field
@@ -144,6 +145,9 @@ def card_record(card: Tag, name: str, base_url: str) -> DoctorRecord:
             langs = [m.group(1).title() for m in LANG_RE.finditer(line)]
             if langs:
                 rec.set("languages", langs, "listing_card", line)
+    card_emails = emails.from_links(card) + emails.find(" ".join(lines))
+    if card_emails:
+        assign_emails(rec, list(dict.fromkeys(card_emails)), "listing_card", snippet, base_url)
     if "city" not in rec.values:
         c = city_from(" ".join(lines))
         if c:
@@ -170,6 +174,8 @@ def _set_card_field(rec: DoctorRecord, f: str, value: str, line: str) -> None:
             rec.set("specialty", rest, "listing_card", line)
     elif f in ("name", "about"):
         return
+    elif f in ("email", "contact_email"):
+        assign_emails(rec, emails.find(value), "listing_card", line, rec.source_url)
     else:
         rec.set(f, value[:200], "listing_card", line)
 
@@ -285,6 +291,9 @@ def tables(main: Tag, base_url: str) -> list[DoctorRecord]:
                     rec.set(f, role or value, "table_row", snippet)
                     if rest:
                         rec.set("specialty", rest, "table_row", snippet)
+                elif f in ("email", "contact_email"):
+                    addrs = emails.find(value) + emails.from_links(cells[idx])
+                    assign_emails(rec, list(dict.fromkeys(addrs)), "table_row", snippet, base_url)
                 elif f in ("languages", "expertise", "opd_timings", "education", "awards", "sub_specialties"):
                     rec.set(f, [v.strip() for v in re.split(r"[,;]", value) if v.strip()], "table_row", snippet)
                 else:

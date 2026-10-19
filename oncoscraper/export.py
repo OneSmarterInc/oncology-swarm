@@ -15,10 +15,10 @@ from .models import ALL_FIELDS, LIST_FIELDS, DoctorRecord
 
 COLUMNS = ["name", "designation", "specialty", "sub_specialties", "department", "qualifications", "experience_years",
            "hospital", "city", "languages", "expertise", "opd_timings", "consultation_fee", "registration", "phone",
-           "email", "education", "awards", "about", "photo_url"]
+           "email", "contact_email", "education", "awards", "about", "photo_url"]
 assert set(COLUMNS) == set(ALL_FIELDS)
-META_COLUMNS = ["profile_url", "source_url", "found_on", "is_oncology", "oncology_score", "oncology_terms",
-                "page_type", "fields_filled"]
+META_COLUMNS = ["source_hospital", "profile_url", "source_url", "found_on", "is_oncology", "oncology_score",
+                "oncology_terms", "page_type", "fields_filled"]
 
 
 def _cell(value):
@@ -35,7 +35,7 @@ def _cell(value):
 def row(rec: DoctorRecord) -> list:
     d = rec.to_dict()
     return [_cell(d.get(c)) for c in COLUMNS] + [
-        _cell(rec.profile_url), _cell(rec.source_url), _cell(rec.found_on), "YES" if rec.is_oncology else "no",
+        _cell(rec.source_hospital), _cell(rec.profile_url), _cell(rec.source_url), _cell(rec.found_on), "YES" if rec.is_oncology else "no",
         round(rec.oncology_score, 2), _cell(rec.oncology_terms), rec.page_type, len(rec.filled_fields()),
     ]
 
@@ -58,7 +58,7 @@ def _sheet(wb, title, headers, rows, widths=None):
     return ws
 
 
-def to_xlsx(result: CrawlResult, path: str | Path) -> Path:
+def to_xlsx(result: CrawlResult, path: str | Path, sites: list[dict] | None = None) -> Path:
     path = Path(path)
     wb = Workbook()
     wb.remove(wb.active)
@@ -83,6 +83,11 @@ def to_xlsx(result: CrawlResult, path: str | Path) -> Path:
     summary += [[f, f"{n} ({(100 * n // len(onco)) if onco else 0}%)"] for f, n in fill.items()]
     _sheet(wb, "Summary", ["Item", "Value"], summary, {"Item": 32, "Value": 80})
     wb.move_sheet("Summary", offset=-4)
+    if sites:
+        keys = ["hospital", "status", "pages", "doctors", "oncologists", "with_email", "start_urls", "note"]
+        _sheet(wb, "Hospitals", [k.replace("_", " ").title() for k in keys],
+               [[_cell(s.get(k)) for k in keys] for s in sites], {"Start Urls": 70, "Note": 50})
+        wb.move_sheet("Hospitals", offset=-(len(wb.sheetnames) - 2))
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
     return path

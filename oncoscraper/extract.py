@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urljoin, urlsplit
 
-from . import listing, oncology, structured, templates
+from . import emails, listing, oncology, structured, templates
 from .annotate import annotate
 from .dom import links, main_content, parse
 from .fetch import normalize_url
@@ -71,6 +71,7 @@ def extract_page(page: Page) -> PageResult:
     if page.error or not page.html:
         return PageResult(url, "error", signals={"error": page.error})
     soup = parse(page.html)
+    emails.decode_protected(soup)
     meta = structured.meta(soup)
     ld_docs, ld_page = structured.jsonld(soup)
     md_docs = structured.microdata(soup)

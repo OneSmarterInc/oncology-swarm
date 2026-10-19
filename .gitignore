@@ -7,3 +7,4 @@ html_dump/
 .pytest_cache/
 tests/site/*.html
 tests/site/*/
+*_sites/

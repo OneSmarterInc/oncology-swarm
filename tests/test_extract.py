@@ -156,3 +156,35 @@ def test_robots_http_status_rules():
     assert run(403)[0] is True and "403" in run(403)[1]["https://x.example"]
     assert run(404)[0] is True
     assert run(503)[0] is False
+
+
+def _cf(addr, key=0x5A):
+    return f"{key:02x}" + "".join(f"{ord(c) ^ key:02x}" for c in addr)
+
+
+def test_emails_cloudflare_obfuscated_and_desk_split():
+    html = f"""<html><body><main><h1>Dr. Kavya Iyer</h1><p>Consultant - Medical Oncology</p><p>MBBS, MD, DM</p>
+    <p>Email: <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="{_cf('kavya.iyer@hosp.example')}">[email&#160;protected]</a></p>
+    <p>For appointments write to oncology [at] hosp [dot] example</p></main>
+    <footer>info@hosp.example</footer></body></html>"""
+    d = extract_page(Page("https://hosp.example/doctors/dr-kavya-iyer", "https://hosp.example/doctors/dr-kavya-iyer", 200, html)).doctors[0]
+    assert d.get("email") == "kavya.iyer@hosp.example"
+    assert d.get("contact_email") == "oncology@hosp.example"   # desk address, not the doctor's
+    assert "info@" not in (d.get("contact_email") or "")        # footer is ignored
+
+
+def test_cloudflare_mailto_link_and_unnamed_single_address():
+    html = f"""<html><body><main><h1>Dr. S.K.S. Marya</h1><p>Chairman - Orthopaedics</p><p>MBBS, MS</p>
+    <a href="/cdn-cgi/l/email-protection#{_cf('drsks@hosp.example', 0x21)}">Mail the doctor</a></main></body></html>"""
+    d = extract_page(Page("https://hosp.example/doctor/sks-marya", "https://hosp.example/doctor/sks-marya", 200, html)).doctors[0]
+    assert d.get("email") == "drsks@hosp.example"   # only non-desk address on his own page
+
+
+def test_card_emails():
+    cards = "".join(f'<div class="c"><h3>Dr. {n}</h3><p>Consultant - Radiation Oncology</p><p>{e}</p></div>'
+                    for n, e in [("Ravi Nair", "ravi.nair(at)hosp(dot)example"), ("Tara Sen", "Email: appointments@hosp.example")])
+    pr = extract_page(Page("https://hosp.example/oncology", "https://hosp.example/oncology", 200,
+                           f"<html><body><main><h1>Radiation Oncology</h1>{cards}</main></body></html>"))
+    by = {d.get("name"): d for d in pr.doctors}
+    assert by["Dr. Ravi Nair"].get("email") == "ravi.nair@hosp.example"
+    assert by["Dr. Tara Sen"].get("email") is None and by["Dr. Tara Sen"].get("contact_email") == "appointments@hosp.example"

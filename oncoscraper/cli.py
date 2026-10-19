@@ -71,6 +71,14 @@ def main(argv=None) -> int:
     s.add_argument("--out", default="oncologists.xlsx", help="output file: .xlsx, .csv or .json (default oncologists.xlsx)")
     common(s)
 
+    b = sub.add_parser("batch", help="crawl every hospital in a CSV list and combine the results")
+    b.add_argument("csv", help="hospital list, e.g. sources/india_hospitals.csv")
+    b.add_argument("--out", default="india_oncologists.xlsx", help="combined Excel file (default india_oncologists.xlsx)")
+    b.add_argument("--pages-per-site", type=int, default=150, help="page budget for each hospital (default 150)")
+    b.add_argument("--only", help="only hospitals whose name contains this text, e.g. --only Apollo")
+    b.add_argument("--no-resume", action="store_true", help="re-crawl hospitals that already finished")
+    common(b)
+
     pg = sub.add_parser("page", help="fetch ONE page and print what was extracted (no crawling)")
     pg.add_argument("url")
     common(pg)
@@ -103,6 +111,27 @@ def main(argv=None) -> int:
         print(f"\nDone in {st['seconds']}s: {st['pages_fetched']} pages, {st['doctors_found']} doctors, "
               f"{st['oncologists']} oncologists ({st['profiles_fetched']} with full profile pages).")
         print(f"Saved: {path.resolve()}")
+        return 0
+    if a.cmd == "batch":
+        from .batch import read_sources, run_batch
+        sources = read_sources(a.csv)
+        if a.only:
+            sources = [s for s in sources if a.only.lower() in s["hospital"].lower()]
+        if not sources:
+            print("No hospitals with a URL found in", a.csv)
+            return 1
+        print(f"{len(sources)} hospitals, up to {a.pages_per_site} pages each. Finished sites are saved and skipped on re-run.")
+
+        def show(e):
+            if e["event"] == "site_start":
+                print(f"\n=== [{e['index']}/{e['total']}] {e['hospital']}  {' '.join(e['urls'])}", flush=True)
+            elif e["event"] == "site_done":
+                print(f"--- {e['hospital']}: {e['status']}, {e['pages']} pages, {e['doctors']} doctors, "
+                      f"{e['oncologists']} oncologists, {e['with_email']} with email  {e['note']}", flush=True)
+            else:
+                _print_progress(e)
+        path = run_batch(sources, a.out, _config(a), a.pages_per_site, resume=not a.no_resume, progress=show)
+        print(f"\nSaved combined file: {path.resolve()}")
         return 0
     if a.cmd == "page":
         cfg = _config(a)

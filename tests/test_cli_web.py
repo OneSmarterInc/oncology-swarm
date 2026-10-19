@@ -70,3 +70,27 @@ def test_jsonld_itemlist_listing():
     pr = extract_page(Page("https://h.example/oncologists", "https://h.example/oncologists", 200, html))
     assert pr.page_type == "listing" and len(pr.doctors) == 3
     assert {d.profile_url for d in pr.doctors} == {"https://h.example/doctors/dr-ira-sen", "https://h.example/doctors/dr-om-rao", "https://h.example/doctors/dr-tara-das"}
+
+
+def test_batch_csv_with_resume(site_url, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    csv_path = tmp_path / "hospitals.csv"
+    csv_path.write_text(
+        "hospital,official_domain,doctors_list_url,oncology_url\n"
+        f"Sunrise Cancer Care,,,{site_url}/specialities/cancer-care\n"
+        f"Sunrise Faculty,,{site_url}/faculty/radiation-oncology,\n"
+        "No URL Hospital,,,\n", encoding="utf-8")
+    out = tmp_path / "india.xlsx"
+    args = ["batch", str(csv_path), "--out", str(out), "--delay", "0", "--render", "never", "--pages-per-site", "5", "--no-sitemap"]
+    assert main(args) == 0
+    wb = load_workbook(out)
+    assert wb.sheetnames[:2] == ["Summary", "Hospitals"]
+    hosp = {r[0].value: r for r in wb["Hospitals"].iter_rows(min_row=2)}
+    assert set(hosp) == {"Sunrise Cancer Care", "Sunrise Faculty"}
+    header = [c.value for c in wb["Oncologists"][1]]
+    rows = [dict(zip(header, [c.value for c in r])) for r in wb["Oncologists"].iter_rows(min_row=2)]
+    hc = next(r for r in rows if r["Name"] == "Dr. Harish Chandra")
+    assert hc["Email"] == "hchandra@inst.example" and hc["Source Hospital"] == "Sunrise Faculty"
+    # Second run resumes from saved per-site results without crawling again.
+    assert main(args) == 0
+    assert "resumed" in capsys.readouterr().out

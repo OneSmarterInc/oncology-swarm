@@ -7,7 +7,7 @@ from typing import Any
 # Fields every doctor record can carry. Order is the export column order.
 SCALAR_FIELDS = (
     "name", "designation", "specialty", "department", "hospital", "city",
-    "experience_years", "registration", "consultation_fee", "phone", "email",
+    "experience_years", "registration", "consultation_fee", "phone", "email", "contact_email",
     "photo_url", "about",
 )
 LIST_FIELDS = (
@@ -53,6 +53,7 @@ class DoctorRecord:
     oncology_terms: list[str] = field(default_factory=list)
     found_on: list[str] = field(default_factory=list)
     page_type: str = "profile"
+    source_hospital: str = ""   # set in batch mode: which hospital list row produced this record
 
     # -- field helpers -------------------------------------------------
     def get(self, name: str, default: Any = None) -> Any:
@@ -152,9 +153,29 @@ class DoctorRecord:
             "oncology_score": round(self.oncology_score, 2),
             "oncology_terms": self.oncology_terms,
             "page_type": self.page_type,
+            "source_hospital": self.source_hospital,
             "field_sources": dict(self.layers),
         })
         return out
+
+    def to_full_dict(self) -> dict[str, Any]:
+        d = self.to_dict()
+        d["values"] = dict(self.values)
+        d["evidence"] = [e.__dict__ for e in self.evidence]
+        return d
+
+    @classmethod
+    def from_full_dict(cls, d: dict[str, Any]) -> "DoctorRecord":
+        rec = cls(source_url=d.get("source_url") or "", profile_url=d.get("profile_url"))
+        rec.values = dict(d.get("values") or {})
+        rec.layers = dict(d.get("field_sources") or {})
+        rec.evidence = [Evidence(**e) for e in d.get("evidence") or []]
+        rec.oncology_score = float(d.get("oncology_score") or 0)
+        rec.oncology_terms = list(d.get("oncology_terms") or [])
+        rec.found_on = list(d.get("found_on") or [])
+        rec.page_type = d.get("page_type") or "profile"
+        rec.source_hospital = d.get("source_hospital") or ""
+        return rec
 
 
 @dataclass
