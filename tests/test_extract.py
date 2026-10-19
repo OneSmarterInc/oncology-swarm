@@ -140,3 +140,19 @@ def test_robots_wildcards():
     assert not rp.allowed("https://x.in/private/a")
     assert not rp.allowed("https://x.in/book-an-appointment/doctor/dr-a")
     assert rp.allowed("https://x.in/find-a-doctor?page=2")
+
+
+def test_robots_http_status_rules():
+    """RFC 9309: 403 on robots.txt means no rules; 5xx means stay out."""
+    import httpx
+    from oncoscraper.config import ScrapeConfig
+    from oncoscraper.fetch import Fetcher
+
+    def run(status):
+        f = Fetcher(ScrapeConfig(delay_seconds=0))
+        f.client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(status, text="no")))
+        return f.robots_for("https://x.example/a").allowed("https://x.example/find-a-doctor"), f.robots_status
+
+    assert run(403)[0] is True and "403" in run(403)[1]["https://x.example"]
+    assert run(404)[0] is True
+    assert run(503)[0] is False

@@ -69,6 +69,7 @@ class Fetcher:
             max_redirects=5,
         )
         self._robots: dict[str, RobotsPolicy] = {}
+        self.robots_status: dict[str, str] = {}
         self._next_time: dict[str, float] = {}
         self._lock = threading.Lock()
         self._renderer = None
@@ -85,6 +86,7 @@ class Fetcher:
         return f"{p.scheme}://{p.netloc}"
 
     def robots_for(self, url: str) -> RobotsPolicy:
+        """robots.txt per RFC 9309: 2xx = obey rules, 4xx = no rules, 5xx/network = treat as disallow-all."""
         origin = self._origin(url)
         if not self.cfg.respect_robots:
             return AllowAll()
@@ -93,13 +95,18 @@ class Fetcher:
         policy: RobotsPolicy = AllowAll()
         try:
             resp = self._raw_get(origin + "/robots.txt")
-            if resp.status_code == 200 and "<html" not in resp.text[:500].lower():
+            body = resp.text[:500].lower()
+            if resp.status_code == 200 and "<html" not in body:
                 policy = RobotsPolicy(resp.text, self.cfg.user_agent)
-            elif resp.status_code in (401, 403):
-                # Site forbids robots.txt itself: treat as full disallow (RFC 9309).
+                self.robots_status[origin] = "200 (rules applied)"
+            elif resp.status_code >= 500:
                 policy = RobotsPolicy("User-agent: *\nDisallow: /", self.cfg.user_agent)
+                self.robots_status[origin] = f"{resp.status_code} (server error, site treated as closed)"
+            else:
+                self.robots_status[origin] = f"{resp.status_code} (no usable robots.txt, no rules)"
         except httpx.HTTPError as exc:
             log.warning("robots.txt unavailable for %s: %s", origin, exc)
+            self.robots_status[origin] = f"unreachable ({type(exc).__name__}), no rules"
         self._robots[origin] = policy
         return policy
 
@@ -110,7 +117,8 @@ class Fetcher:
         if not self.cfg.allow_private_hosts and not _is_public(p.hostname):
             raise FetchBlocked(f"private or local address refused: {p.hostname}")
         if not self.robots_for(url).allowed(url):
-            raise FetchBlocked("robots.txt disallows this URL")
+            status = self.robots_status.get(self._origin(url), "")
+            raise FetchBlocked(f"robots.txt disallows this URL [robots.txt HTTP {status}]")
 
     # -- transport ---------------------------------------------------------
     def _pace(self, url: str) -> None:

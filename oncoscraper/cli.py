@@ -110,6 +110,8 @@ def main(argv=None) -> int:
         finally:
             fetcher.close()
         print(f"HTTP {page.status}  final URL: {page.final_url}  rendered: {page.rendered}  {page.error or ''}")
+        for origin, st in fetcher.robots_status.items():
+            print(f"robots.txt at {origin}: HTTP {st}")
         _doc_lines(extract_page(page))
         return 0 if not page.error else 1
     if a.cmd == "file":
