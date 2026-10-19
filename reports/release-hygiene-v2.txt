@@ -1,0 +1,12 @@
+Release hygiene verification, 19 October 2026
+
+PASS: 48 source/test/migration/script/fixture/config files match the extracted release used for the final 346-pass suite
+PASS: original 61 starter files match the original ZIP byte-for-byte
+Original ZIP SHA-256: 03dcd0c71d7517d780532ddb2a37759a6b791dff78dc720dc056501d8cdbbe0e
+
+Package filters exclude .env, data/, .venv/, .git/, caches, Python bytecode, databases and SQLite journals, workbooks, logs and key/certificate containers
+Reviewed package file inventory: source, tests, migrations, public professional excerpt provenance, synthetic fixtures, docs, templates and verification reports only
+No generated real-person directory, approved real-record database, model credentials, deployment credentials, or generated workbook is included
+The three minimal Max factual excerpts are intentionally retained, explicitly reconstructed and identified in fixtures/real/README.md; they are not native captured pages or seeded approved data
+
+The packager validates archive CRCs, exact file-list/manifest agreement and every SHA-256. The manifest excludes only itself. ZIP checksum is supplied separately because an archive cannot embed its own final checksum

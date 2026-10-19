@@ -1,0 +1,40 @@
+# Copy to /etc/oncology-swarm.env, root:root mode 0600.
+# Blank intentionally: generate a private token with python -m app.cli token.
+ADMIN_TOKEN=
+DATABASE_URL=postgresql+psycopg://oncology@/oncology?host=/var/run/postgresql
+MODE=live
+# Run Alembic explicitly; never use create_all to upgrade an old database.
+DEMO_AUTO_CREATE=0
+# Exact approved official hostnames, comma separated. No source is pre-approved.
+# Live jobs also need an active human-approved source record in the application.
+ALLOWED_DOMAINS=
+WORKER_COUNT=3
+# Durable per-run ceilings, preserved across restart. Reset only paused/drained.
+MAX_JOBS=100
+# Includes robots, redirects, retries and failed HTTP attempts; not just profiles.
+MAX_REQUESTS=100
+REQUESTS_PER_MINUTE=6
+REQUEST_TIMEOUT_SECONDS=15
+MAX_RESPONSE_BYTES=2000000
+MAX_REDIRECTS=3
+LEASE_SECONDS=120
+MAX_ATTEMPTS=3
+USER_AGENT=OncologyResearchDirectory/2.0
+# Optional real authorized contact: HTTPS URL or mailto address. Do not invent one.
+USER_AGENT_CONTACT=
+# Optional paid extraction; keep disabled for the keyless demo and initial pilot.
+# Source text is sent to the selected provider. Read docs/LLM_ADAPTER.md first.
+LLM_ENABLED=0
+LLM_PROVIDER=openai
+OPENAI_API_KEY=
+OPENAI_MODEL=
+MISTRAL_API_KEY=
+MISTRAL_MODEL=
+# Per-run call ceiling, separate from source requests. Not a currency budget.
+MAX_LLM_CALLS=20
+LLM_MAX_OUTPUT_TOKENS=4000
+LLM_MAX_INPUT_CHARS=40000
+# Optional USD per million tokens for the exact model; blank means unknown cost.
+# Both rates plus valid provider token counts are needed for an estimate.
+LLM_INPUT_PRICE_PER_MILLION=
+LLM_OUTPUT_PRICE_PER_MILLION=

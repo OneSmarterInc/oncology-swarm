@@ -1,0 +1,25 @@
+ONCOLOGY RESEARCH DIRECTORY V2
+
+1. Clone the repository (or extract a release) and open README.md.
+2. EXISTING V1 DATABASE: read docs/V2_MIGRATION.md before starting v2.
+   Back up and test the forward migration. Never stamp an old database at head.
+3. NEW WINDOWS DEMO: follow docs/WINDOWS_QUICKSTART.md from step 1.
+4. Keep LLM_ENABLED=0. The fixture demo needs no paid API key.
+   ADMIN_TOKEN is your private local app password, not a model-provider key.
+5. Inspect synthetic evidence, explicitly approve an eligible record, then export.
+
+New: approved source/hospital master, bounded discovery/pagination/sitemaps,
+review forms and bulk selection, correction/withdrawal/merge/unmerge, manual
+refresh, per-run budgets, usage metrics, and optional OpenAI/Mistral adapters.
+
+Implemented and unfinished work: docs/GAP_MATRIX.md
+Source and reuse boundaries: docs/SOURCE_POLICY.md
+Optional model extraction: docs/LLM_ADAPTER.md
+Real-source procedure/results: docs/LIVE_PILOT.md and docs/LIVE_PILOT_RESULTS.md
+PostgreSQL/EC2 templates: docs/POSTGRESQL.md and docs/EC2_UBUNTU.md
+What actually ran: TEST_REPORT.md
+
+The backend live pilot was blocked by DNS before any HTTP request. No completed
+live directory, paid provider trial, real PostgreSQL run, deployment, native-page
+fixture corpus, or throughput benchmark is claimed. Real-source candidates are
+UNAPPROVED; references in this repository or archive do not grant collection or reuse rights.

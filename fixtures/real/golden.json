@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "meaning": "Human transcribed public facts present in these excerpts; not independent credential verification and not an assertion of full native-page parser success. Specialty is one explicit oncology specialty, hospital is one of possibly several affiliations.",
+  "cases": {
+    "max-meenu-walia": {
+      "name": "Dr. Meenu Walia",
+      "specialty": "Medical Oncology",
+      "hospital": "Max Super Specialty Hospital, Vaishali"
+    },
+    "max-atul-sharma": {
+      "name": "Prof.(Dr.) Atul Sharma",
+      "specialty": "Medical Oncology",
+      "hospital": "Max Super Speciality Hospital, Saket"
+    },
+    "max-vaibhav-choudhary": {
+      "name": "Dr Vaibhav Choudhary",
+      "specialty": "Medical Oncology",
+      "hospital": "Nanavati Max Super Speciality Hospital, Mumbai"
+    }
+  }
+}

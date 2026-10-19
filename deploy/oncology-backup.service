@@ -1,0 +1,10 @@
+[Unit]
+Description=Oncology directory PostgreSQL logical backup
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/oncology-backup
+UMask=0077

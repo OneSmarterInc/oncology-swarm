@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily oncology directory backup
+
+[Timer]
+# UTC is explicit; adjust frequency to your accepted data-loss window.
+OnCalendar=*-*-* 02:15:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=oncology-backup.service
+
+[Install]
+WantedBy=timers.target

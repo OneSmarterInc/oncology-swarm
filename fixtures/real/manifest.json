@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "fixture_kind": "reconstructed_minimal_web_visible_excerpts",
+  "not_raw_html_capture": true,
+  "not_live_fetcher_evidence": true,
+  "not_approved_directory_data": true,
+  "created_at": "2026-10-19T09:20:22.051819+00:00",
+  "reuse_notice": "No broad reuse license established. Minimal public professional facts only, for private regression research; no biographies, photos, contacts, schedules, fees, or patient material. Review source terms and purpose before redistribution or directory publication. Public availability and robots permission do not establish reuse rights.",
+  "cases": [
+    {
+      "id": "max-meenu-walia",
+      "source_url": "https://www.maxhealthcare.in/doctor/dr-meenu-walia",
+      "source_lines": {
+        "name": 1038,
+        "specialty": 1042,
+        "hospital": 1173
+      },
+      "web_index_crawl_label": "4 days ago",
+      "institution": "Max Healthcare",
+      "source_type": "official_institution",
+      "observed_via": "web search/open text representation",
+      "web_observed_at": "2026-10-19T09:17:51+00:00",
+      "origin_retrieved_at": null,
+      "origin_http_status": null,
+      "origin_body_sha256": null,
+      "original_html_captured": false,
+      "fixture_file": "max-meenu-walia.html",
+      "fixture_sha256": "4c903c6872802fa35b8aad17cbec7fbf8e0616016bef42b7d4866e3feafa30c2",
+      "excerpt_text_sha256": "b3b0f96747ea4f6181ad24f74ca726604ac2703933dd230e0d7f5b5e136e4943",
+      "excerpt_word_count": 10,
+      "transformations": [
+        "Only the three quoted factual spans were retained; surrounding page content omitted.",
+        "Each span was HTML-escaped and wrapped with locally authored h1/p markup.",
+        "No original attributes, DOM relationships, JSON-LD, or labels were preserved or invented."
+      ],
+      "permission_status": "limited_private_research_no_broad_reuse_license_established",
+      "robots_status": "not_retrieved_by_backend_due_dns_failure",
+      "source_licensure_status": "not_independently_verified"
+    },
+    {
+      "id": "max-atul-sharma",
+      "source_url": "https://www.maxhealthcare.in/doctor/dr-atul-sharma",
+      "source_lines": {
+        "name": 1038,
+        "specialty": 1042,
+        "hospital": 1068
+      },
+      "web_index_crawl_label": "3 days ago",
+      "institution": "Max Healthcare",
+      "source_type": "official_institution",
+      "observed_via": "web search/open text representation",
+      "web_observed_at": "2026-10-19T09:17:51+00:00",
+      "origin_retrieved_at": null,
+      "origin_http_status": null,
+      "origin_body_sha256": null,
+      "original_html_captured": false,
+      "fixture_file": "max-atul-sharma.html",
+      "fixture_sha256": "35fd7f2665975288df1652f2fc3c9bd88f072148dae2c2a8beee23a1b2d0731d",
+      "excerpt_text_sha256": "aa055da6329fe0854d459bcae64cda8827e4c6fcb6a9fdf0122774403edabc94",
+      "excerpt_word_count": 10,
+      "transformations": [
+        "Only the three quoted factual spans were retained; surrounding page content omitted.",
+        "Each span was HTML-escaped and wrapped with locally authored h1/p markup.",
+        "No original attributes, DOM relationships, JSON-LD, or labels were preserved or invented."
+      ],
+      "permission_status": "limited_private_research_no_broad_reuse_license_established",
+      "robots_status": "not_retrieved_by_backend_due_dns_failure",
+      "source_licensure_status": "not_independently_verified"
+    },
+    {
+      "id": "max-vaibhav-choudhary",
+      "source_url": "https://www.maxhealthcare.in/doctor/dr-vaibhav-choudhary",
+      "source_lines": {
+        "name": 1038,
+        "specialty": 1042,
+        "hospital": 1153
+      },
+      "web_index_crawl_label": "last month",
+      "institution": "Max Healthcare",
+      "source_type": "official_institution",
+      "observed_via": "web search/open text representation",
+      "web_observed_at": "2026-10-19T09:17:51+00:00",
+      "origin_retrieved_at": null,
+      "origin_http_status": null,
+      "origin_body_sha256": null,
+      "original_html_captured": false,
+      "fixture_file": "max-vaibhav-choudhary.html",
+      "fixture_sha256": "f0b4bd6d20fcc9aaf9dfc610983b63b3f45dd9687c5fb999b49ad2d5de34480f",
+      "excerpt_text_sha256": "be9c4cd0ccf62a9b7106dc0828e492ecd363fd54ee91f1005e9a01467121e822",
+      "excerpt_word_count": 11,
+      "transformations": [
+        "Only the three quoted factual spans were retained; surrounding page content omitted.",
+        "Each span was HTML-escaped and wrapped with locally authored h1/p markup.",
+        "No original attributes, DOM relationships, JSON-LD, or labels were preserved or invented."
+      ],
+      "permission_status": "limited_private_research_no_broad_reuse_license_established",
+      "robots_status": "not_retrieved_by_backend_due_dns_failure",
+      "source_licensure_status": "not_independently_verified"
+    }
+  ]
+}

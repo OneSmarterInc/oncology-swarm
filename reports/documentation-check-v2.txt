@@ -1,0 +1,2 @@
+PASS: 56 local documentation links resolve; 34 shell blocks and backup script pass bash -n; Markdown code fences balanced
+Gap matrix: {'Implemented': 19, 'Partial': 12, 'Deferred': 6} ; 37 unique issue IDs

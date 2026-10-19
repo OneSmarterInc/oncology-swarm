@@ -1,0 +1,29 @@
+Fresh v2 extracted-release smoke: clean virtual environment, default nested SQLite path, no pre-existing data directory, LLM disabled
+b592cf2d0101 (head)
+No new upgrade operations detected.
+1: queued https://demo.example.invalid/doctors/asha-rao
+2: queued https://demo.example.invalid/doctors/vikram-sen
+{
+  "run_number": 1,
+  "counts": {
+    "review": 2
+  },
+  "requests_used": 0,
+  "jobs_created": 2,
+  "llm_calls_reserved": 0,
+  "llm_responses_recorded": 0,
+  "llm_calls_without_usage": 0,
+  "input_tokens": null,
+  "output_tokens": null,
+  "estimated_cost_usd": null,
+  "cost_unknown_responses": 0,
+  "cost_is_partial": false,
+  "approved_exportable": 0,
+  "active_discovery_runs": 0,
+  "pending_review": 2,
+  "failed": 0
+}
+PASS: revision b592cf2d0101; two synthetic review proposals; zero doctors, HTTP reservations and model calls; SQLite integrity/FK checks clean
+...                                                                      [100%]
+3 passed in 0.56s
+PASS: login, filters/pagination, lossless form/evidence, JSON editor, checklist, versioned review, selected bulk acknowledgement, safe source rendering, stale navigation, export and interrupted logout

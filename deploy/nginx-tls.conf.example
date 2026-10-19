@@ -1,0 +1,43 @@
+# Example only: replace the domain, certificate paths, and reviewer IP ranges.
+# Keep port 8000 and PostgreSQL inaccessible from external networks.
+# Install only after a valid TLS certificate and key exist.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name directory.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/directory.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/directory.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:oncology_tls:10m;
+    ssl_session_timeout 10m;
+
+    # Documentation-only addresses: replace with authorized reviewers' public IPs.
+    # Never replace these with 0.0.0.0/0 or ::/0 for this admin-only starter.
+    allow 192.0.2.10/32;
+    allow 2001:db8::10/128;
+    deny all;
+
+    client_max_body_size 1m;
+    server_tokens off;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Authorization $http_authorization;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+}
+
+# No public plaintext proxy is supplied. Use HTTPS or an SSH tunnel.
+# An ACME HTTP challenge, if chosen, needs a separate narrowly scoped challenge
+# location; it must not proxy API requests over plaintext HTTP.
