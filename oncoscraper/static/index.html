@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OncoScraper</title>
+<style>
+:root { --ink:#13232b; --muted:#5b6b73; --line:#d9e1e4; --bg:#f4f7f8; --card:#fff; --accent:#0f6e6e; --accent-2:#0b5252; --bad:#a8322d; --ok:#1d7a3c; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+header { background:#123a44; color:#fff; padding:22px 24px; }
+header h1 { margin:0; font-size:22px; } header p { margin:4px 0 0; color:#c8dde0; font-size:14px; }
+main { max-width:1280px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
+h2 { margin:0 0 12px; font-size:17px; }
+label { display:block; font-weight:600; font-size:13px; margin:0 0 4px; }
+textarea, input, select { width:100%; padding:9px 10px; border:1px solid #b9c6ca; border-radius:7px; font:inherit; background:#fff; }
+textarea { min-height:70px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:12px; }
+.check { display:flex; gap:8px; align-items:center; font-weight:400; margin-top:24px; } .check input { width:auto; }
+button { background:var(--accent); color:#fff; border:0; padding:10px 18px; border-radius:7px; font:inherit; font-weight:600; cursor:pointer; }
+button:hover { background:var(--accent-2); } button.secondary { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+button:disabled { opacity:.5; cursor:not-allowed; }
+.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+.hint { color:var(--muted); font-size:13px; margin:6px 0 0; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; }
+.stat { background:var(--bg); border-radius:8px; padding:10px 12px; } .stat b { display:block; font-size:22px; }
+.stat span { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; margin:12px 0; } .bar i { display:block; height:100%; background:var(--accent); width:0; transition:width .4s; }
+.log { font:12px/1.5 ui-monospace,Consolas,monospace; max-height:220px; overflow:auto; background:#0f1d22; color:#cfe3e6; border-radius:8px; padding:10px; white-space:pre; }
+.log .x { color:#ff9b8f; } .log .p { color:#8fe3a5; } .log .l { color:#9cc8ff; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { background:var(--bg); position:sticky; top:0; }
+.tablewrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+.pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:#e3efef; color:var(--accent-2); }
+.state { font-weight:700; } .state.failed { color:var(--bad); } .state.done { color:var(--ok); }
+pre.json { background:var(--bg); padding:12px; border-radius:8px; overflow:auto; max-height:420px; font-size:12px; }
+a { color:var(--accent); }
+@media (prefers-color-scheme: dark) {
+  :root { --ink:#e3ecee; --muted:#9db0b5; --line:#2c3a3f; --bg:#12191c; --card:#1a2327; }
+  textarea, input, select { background:#11181b; color:var(--ink); border-color:#33454b; }
+  button.secondary { background:transparent; } .pill { background:#1f3337; color:#9fd6d6; }
+}
+</style>
+</head>
+<body>
+<header><h1>OncoScraper</h1><p>Give a hospital website, find-a-doctor page, department page or a single doctor profile. Finds oncologists using rules only, no API key.</p></header>
+<main>
+<section class="card">
+  <h2>1. Start a crawl</h2>
+  <label for="urls">Start URL(s), one per line</label>
+  <textarea id="urls" placeholder="https://www.hospital-website.in/find-a-doctor"></textarea>
+  <div class="grid">
+    <div><label for="max_pages">Max pages</label><input id="max_pages" type="number" value="200" min="1" max="5000"></div>
+    <div><label for="depth">Max link depth</label><input id="depth" type="number" value="4" min="0" max="10"></div>
+    <div><label for="delay">Delay between requests (s)</label><input id="delay" type="number" value="1.5" step="0.5" min="0"></div>
+    <div><label for="render">JavaScript pages</label><select id="render"><option value="auto">Auto (if Playwright installed)</option><option value="never">Never render</option><option value="always">Always render</option></select></div>
+    <label class="check"><input type="checkbox" id="all"> Keep all specialities</label>
+    <label class="check"><input type="checkbox" id="sitemap" checked> Use sitemap.xml</label>
+    <label class="check"><input type="checkbox" id="subdomains"> Include subdomains</label>
+  </div>
+  <div class="row"><button id="start">Start crawl</button><button id="stop" class="secondary" disabled>Stop</button>
+  <span class="hint">robots.txt is always respected. Only the same website is crawled.</span></div>
+</section>
+
+<section class="card" id="progress-card" hidden>
+  <h2>2. Progress <span id="state" class="state"></span></h2>
+  <div class="stats">
+    <div class="stat"><span>Pages fetched</span><b id="s-fetched">0</b></div>
+    <div class="stat"><span>Queued</span><b id="s-queued">0</b></div>
+    <div class="stat"><span>Doctors found</span><b id="s-doctors">0</b></div>
+    <div class="stat"><span>Oncologists</span><b id="s-onco">0</b></div>
+    <div class="stat"><span>Elapsed</span><b id="s-time">0s</b></div>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="log" id="log"></div>
+  <div class="row" id="downloads" hidden>
+    <a id="dl-xlsx"><button>Download Excel</button></a>
+    <a id="dl-csv"><button class="secondary">CSV</button></a>
+    <a id="dl-json"><button class="secondary">JSON</button></a>
+  </div>
+  <p class="hint" id="error"></p>
+</section>
+
+<section class="card" id="results-card" hidden>
+  <h2>3. Results <span class="pill" id="count"></span></h2>
+  <input id="filter" placeholder="Filter by name, hospital, city or specialty">
+  <div class="tablewrap" style="margin-top:10px"><table>
+    <thead><tr><th>Name</th><th>Designation</th><th>Specialty</th><th>Qualifications</th><th>Exp.</th><th>Hospital</th><th>City</th><th>Fields</th><th>Source</th></tr></thead>
+    <tbody id="rows"></tbody></table></div>
+</section>
+
+<section class="card">
+  <h2>Test one page</h2>
+  <p class="hint">Check what the extractor reads from a single URL before running a full crawl.</p>
+  <div class="row" style="margin-top:6px"><input id="page-url" placeholder="https://www.hospital-website.in/doctor/dr-name" style="flex:1"><button id="page-btn" class="secondary">Test page</button></div>
+  <pre class="json" id="page-out" hidden></pre>
+</section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let jobId = null, timer = null, rows = [];
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function list(v) { return Array.isArray(v) ? v.join(', ') : (v ?? ''); }
+function safeUrl(u) { return /^https?:\/\//i.test(u || '') ? u : '#'; }
+
+$('start').onclick = async () => {
+  const urls = $('urls').value.split(/\s+/).filter(Boolean);
+  if (!urls.length) { alert('Enter at least one URL'); return; }
+  const body = { urls, max_pages:+$('max_pages').value, max_depth:+$('depth').value, delay_seconds:+$('delay').value,
+    render:$('render').value, all_specialties:$('all').checked, use_sitemaps:$('sitemap').checked, include_subdomains:$('subdomains').checked };
+  const r = await fetch('/api/jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (!r.ok) { $('error').textContent = await r.text(); return; }
+  jobId = (await r.json()).id;
+  $('progress-card').hidden = false; $('results-card').hidden = false; $('downloads').hidden = true; $('error').textContent = '';
+  $('log').textContent = ''; $('start').disabled = true; $('stop').disabled = false;
+  clearInterval(timer); timer = setInterval(poll, 1500); poll();
+};
+$('stop').onclick = async () => { if (jobId) await fetch(`/api/jobs/${jobId}/stop`, {method:'POST'}); $('stop').disabled = true; };
+
+async function poll() {
+  const r = await fetch(`/api/jobs/${jobId}`); if (!r.ok) return;
+  const j = await r.json();
+  $('state').textContent = j.state; $('state').className = 'state ' + j.state;
+  $('s-fetched').textContent = j.progress.fetched; $('s-queued').textContent = j.progress.queued;
+  $('s-doctors').textContent = j.progress.doctors_total; $('s-onco').textContent = j.progress.oncologists;
+  $('s-time').textContent = j.elapsed + 's';
+  $('bar').style.width = Math.min(100, 100 * j.progress.fetched / j.max_pages) + '%';
+  $('log').innerHTML = j.log.map(l => {
+    const cls = l.error ? 'x' : (l.type === 'profile' ? 'p' : (l.type === 'listing' ? 'l' : ''));
+    return `<span class="${cls}">${esc((l.type||'').padEnd(8))} ${esc(l.status)} ${esc(l.url)}${l.doctors ? '  +' + l.doctors : ''}${l.error ? '  (' + esc(l.error) + ')' : ''}</span>`;
+  }).join('\n');
+  $('log').scrollTop = $('log').scrollHeight;
+  rows = j.doctors; render();
+  if (j.state !== 'running') {
+    clearInterval(timer); $('start').disabled = false; $('stop').disabled = true;
+    if (j.error) $('error').textContent = j.error;
+    if (j.stats) {
+      $('downloads').hidden = false;
+      $('dl-xlsx').href = `/api/jobs/${jobId}/download.xlsx`; $('dl-csv').href = `/api/jobs/${jobId}/download.csv`; $('dl-json').href = `/api/jobs/${jobId}/download.json`;
+    }
+  }
+}
+function render() {
+  const q = $('filter').value.toLowerCase();
+  const shown = rows.filter(d => !q || JSON.stringify(d).toLowerCase().includes(q));
+  $('count').textContent = shown.length + ' doctors';
+  $('rows').innerHTML = shown.map(d => `<tr><td><b>${esc(d.name)}</b>${d.page_type==='profile' ? '' : ' <span class="pill">card</span>'}</td>
+    <td>${esc(d.designation)}</td><td>${esc(d.specialty || list(d.sub_specialties))}</td><td>${esc(list(d.qualifications))}</td>
+    <td>${esc(d.experience_years)}</td><td>${esc(d.hospital)}</td><td>${esc(d.city)}</td><td>${d.fields}</td>
+    <td><a href="${esc(safeUrl(d.profile_url || d.source_url))}" target="_blank" rel="noopener">open</a></td></tr>`).join('');
+}
+$('filter').oninput = render;
+
+$('page-btn').onclick = async () => {
+  const url = $('page-url').value.trim(); if (!url) return;
+  $('page-out').hidden = false; $('page-out').textContent = 'Fetching…';
+  const r = await fetch('/api/page', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, render:$('render').value})});
+  $('page-out').textContent = JSON.stringify(await r.json(), null, 2);
+};
+</script>
+</body>
+</html>

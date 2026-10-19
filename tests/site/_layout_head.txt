@@ -1,0 +1,7 @@
+<header class="site-header"><div class="top-bar">Emergency: <a href="tel:+911140554055">011 4055 4055</a></div>
+<nav class="main-nav"><ul>
+<li><a href="/">Home</a></li><li><a href="/find-a-doctor">Find a Doctor</a></li>
+<li><a href="/specialities/cancer-care">Cancer Care</a></li><li><a href="/specialities/cardiology">Cardiology</a></li>
+<li><a href="/faculty/radiation-oncology">Radiation Oncology Faculty</a></li>
+<li><a href="/health-packages">Health Packages</a></li><li><a href="/blog/what-is-chemotherapy">Blog</a></li>
+<li><a href="/book-an-appointment/doctor">Book Appointment</a></li></ul></nav></header>
