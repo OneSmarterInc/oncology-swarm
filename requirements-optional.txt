@@ -1,3 +1,0 @@
-# Headless browser for JavaScript-only hospital pages. After installing run:
-#   python -m playwright install chromium
-playwright>=1.44

@@ -23,8 +23,11 @@ log = logging.getLogger(__name__)
 HTML_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
 
 
-CHALLENGE_RE = re.compile(r"cf-chl|challenge-platform|Just a moment\.\.\.|Attention Required|captcha|ddos-guard|"
-                          r"Checking your browser|perimeterx|_Incapsula_", re.I)
+CHALLENGE_RE = re.compile(r"cf-chl|challenge-platform|Just a moment\.\.\.|Checking your browser|"
+                          r"_Incapsula_|ddos-guard|perimeterx|px-captcha", re.I)
+
+
+BLOCK_CODES = (401, 403, 429, 503)
 
 
 class FetchBlocked(Exception):
@@ -63,8 +66,13 @@ class Fetcher:
             timeout=httpx.Timeout(config.timeout_seconds, connect=15.0),
             headers={
                 "User-Agent": config.user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-IN,en;q=0.9",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
             },
             max_redirects=5,
         )
@@ -73,6 +81,8 @@ class Fetcher:
         self._next_time: dict[str, float] = {}
         self._lock = threading.Lock()
         self._renderer = None
+        self._renderer_error: str | None = None
+        self.browser_hosts: set[str] = set()   # sites that only answer real browsers
         self.requests_made = 0
 
     def close(self) -> None:
@@ -99,6 +109,18 @@ class Fetcher:
             if resp.status_code == 200 and "<html" not in body:
                 policy = RobotsPolicy(resp.text, self.cfg.user_agent)
                 self.robots_status[origin] = "200 (rules applied)"
+            elif resp.status_code in BLOCK_CODES and self._browser_ok():
+                # Firewall blocks plain HTTP clients; read robots.txt the way a browser would.
+                b = self._browser_get(origin + "/robots.txt", expand=False)
+                if b and b.status == 200 and "<html" not in b.text[:500].lower():
+                    policy = RobotsPolicy(b.text, self.cfg.user_agent)
+                    self.robots_status[origin] = f"{resp.status_code} to plain HTTP, 200 in browser (rules applied)"
+                    self.browser_hosts.add(urlsplit(origin).netloc)
+                elif b and b.status >= 500:
+                    policy = RobotsPolicy("User-agent: *\nDisallow: /", self.cfg.user_agent)
+                    self.robots_status[origin] = f"{b.status} in browser (server error, site treated as closed)"
+                else:
+                    self.robots_status[origin] = f"{resp.status_code} (browser got {b.status if b else 'nothing'}; no rules)"
             elif resp.status_code >= 500:
                 policy = RobotsPolicy("User-agent: *\nDisallow: /", self.cfg.user_agent)
                 self.robots_status[origin] = f"{resp.status_code} (server error, site treated as closed)"
@@ -151,6 +173,8 @@ class Fetcher:
             self.check_allowed(url)
         except FetchBlocked as exc:
             return Page(url, url, 0, "", error=str(exc))
+        if urlsplit(url).netloc in self.browser_hosts:
+            return self._via_browser(url, url, 0, "")
         last_error = None
         for attempt in range(self.cfg.retries + 1):
             try:
@@ -165,14 +189,9 @@ class Fetcher:
                 continue
             final = normalize_url(str(resp.url))
             ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-            if resp.status_code in (403, 429, 503) and CHALLENGE_RE.search(resp.text[:20000]) and self.cfg.render != "never":
-                # Bot-check interstitial: a real browser often passes it. Robots rules were already checked.
-                rendered = self._render(Page(url, final, resp.status_code, resp.text, ctype or "text/html"))
-                if rendered and not CHALLENGE_RE.search(rendered.html[:20000]):
-                    rendered.status = 200
-                    self._save(rendered)
-                    return rendered
-                return Page(url, final, resp.status_code, "", ctype, error=f"HTTP {resp.status_code} (bot check page)")
+            if resp.status_code in BLOCK_CODES:
+                # Firewall refuses non-browser clients (common on large hospital sites).
+                return self._via_browser(url, final, resp.status_code, ctype)
             if resp.status_code >= 400:
                 return Page(url, final, resp.status_code, "", ctype, error=f"HTTP {resp.status_code}")
             if ctype and not ctype.startswith(HTML_TYPES):
@@ -202,22 +221,52 @@ class Fetcher:
         shell = re.search(r'id=["\'](?:root|app|__next|__nuxt)["\']', page.html) is not None
         return words < 80 or (shell and words < 250)
 
-    def _render(self, page: Page) -> Page | None:
-        if self._renderer is None:
+    def _browser_ok(self) -> bool:
+        if self.cfg.render == "never":
+            return False
+        if self._renderer is None and self._renderer_error is None:
             try:
                 from .render import BrowserRenderer
                 self._renderer = BrowserRenderer(self.cfg)
             except Exception as exc:  # Playwright missing or browser not installed
-                log.info("JS rendering unavailable (%s); using raw HTML", exc)
-                self.cfg.render = "never"
-                return None
-        try:
-            self._pace(page.final_url)
-            html = self._renderer.render(page.final_url)
-            return Page(page.url, page.final_url, page.status, html, page.content_type, rendered=True)
-        except Exception as exc:
-            log.warning("render failed for %s: %s", page.final_url, exc)
+                self._renderer_error = str(exc)
+                log.warning("Browser unavailable: %s", exc)
+        return self._renderer is not None
+
+    def _browser_get(self, url: str, expand: bool = True):
+        if not self._browser_ok():
             return None
+        try:
+            self._pace(url)
+            self.requests_made += 1
+            return self._renderer.fetch(url, expand=expand)
+        except Exception as exc:
+            log.warning("browser fetch failed for %s: %s", url, exc)
+            return None
+
+    def _via_browser(self, url: str, final: str, http_status: int, ctype: str) -> Page:
+        if not self._browser_ok():
+            hint = (f"site blocks non-browser clients; install Playwright to fetch it: "
+                    f"pip install -r requirements.txt && python -m playwright install chromium"
+                    if self.cfg.render != "never" else "site blocks non-browser clients (browser disabled)")
+            return Page(url, final, http_status, "", ctype, error=f"HTTP {http_status}: {hint}")
+        b = self._browser_get(url)
+        if b is None:
+            return Page(url, final, http_status, "", ctype, error=f"HTTP {http_status}; browser fetch failed")
+        if b.status >= 400 or CHALLENGE_RE.search(b.html[:20000]):
+            return Page(url, normalize_url(b.url), b.status, "", b.content_type,
+                        error=f"HTTP {b.status} even in a real browser (site blocks automated access)")
+        if http_status:
+            self.browser_hosts.add(urlsplit(url).netloc)
+        page = Page(url, normalize_url(b.url), b.status or 200, b.html, b.content_type or "text/html", rendered=True)
+        self._save(page)
+        return page
+
+    def _render(self, page: Page) -> Page | None:
+        b = self._browser_get(page.final_url)
+        if b is None or b.status >= 400:
+            return None
+        return Page(page.url, page.final_url, page.status, b.html, page.content_type, rendered=True)
 
     def _save(self, page: Page) -> None:
         if not self.cfg.save_html_dir or not page.html:

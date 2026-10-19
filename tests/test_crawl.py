@@ -14,6 +14,16 @@ def cfg(**kw):
     return ScrapeConfig(**base)
 
 
+def need_browser():
+    """Skip browser tests when Playwright or its Chromium build is missing."""
+    import pytest
+    from oncoscraper.render import BrowserRenderer
+    try:
+        BrowserRenderer(ScrapeConfig()).close()
+    except Exception as exc:
+        pytest.skip(f"browser unavailable: {exc}")
+
+
 def by_name(result):
     return {d.get("name"): d for d in result.doctors}
 
@@ -69,8 +79,24 @@ def test_javascript_page_needs_browser(site_url):
     import pytest
     plain = Crawler(cfg(max_pages=1, use_sitemaps=False, render="never")).run([site_url + "/js-team"])
     assert plain.doctors == []
-    pytest.importorskip("playwright")
+    need_browser()
     rendered = Crawler(cfg(max_pages=1, use_sitemaps=False, render="auto")).run([site_url + "/js-team"])
     names = {d.get("name") for d in rendered.oncologists}
     assert names == {"Dr. Sameer Kulkarni", "Dr. Ritika Bose"}
     assert rendered.pages[0].note == "rendered"
+
+
+def test_firewall_403_falls_back_to_real_browser(waf_url):
+    """Sites like maxhealthcare.in answer 403 to non-browser clients, including for robots.txt."""
+    import pytest
+    blocked = Crawler(cfg(max_pages=1, use_sitemaps=False, render="never")).run([waf_url + "/doctor/dr-meenu-walia"])
+    assert blocked.doctors == [] and "403" in blocked.pages[0].note
+    need_browser()
+    crawler = Crawler(cfg(max_pages=4, use_sitemaps=False, render="auto"))
+    result = crawler.run([waf_url + "/doctor/dr-meenu-walia"])
+    docs = {d.get("name"): d for d in result.doctors}
+    assert docs["Dr. Meenu Walia"].get("experience_years") == "28"
+    assert crawler.fetcher.browser_hosts  # later pages went straight to the browser
+    # robots.txt was read through the browser and still obeyed
+    assert "rules applied" in next(iter(crawler.fetcher.robots_status.values()))
+    assert not any("/private" in p.url and p.page_type != "error" for p in result.pages)

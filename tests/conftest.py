@@ -59,3 +59,26 @@ def site_url():
 def hits():
     Handler.hits.clear()
     return Handler.hits
+
+
+class WafHandler(Handler):
+    """Imitates a hospital firewall: 403 for every non-browser client, normal site for browsers."""
+
+    def do_GET(self):  # noqa: N802
+        ua = self.headers.get("User-Agent", "")
+        if "OncoScraper" in ua or "python" in ua.lower():
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<html><body>Access Denied</body></html>")
+            return
+        super().do_GET()
+
+
+@pytest.fixture(scope="session")
+def waf_url():
+    make_site.build()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WafHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()

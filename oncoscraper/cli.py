@@ -22,6 +22,7 @@ def _config(a) -> ScrapeConfig:
         save_html_dir=a.save_html, extra_profile_patterns=a.pattern or [],
         **({"user_agent": a.user_agent} if a.user_agent else {}),
         **({"allow_private_hosts": True} if a.allow_local else {}),
+        show_browser=a.show_browser,
     ).validate()
 
 
@@ -62,6 +63,7 @@ def main(argv=None) -> int:
         sp.add_argument("--save-html", metavar="DIR", help="save every fetched page to DIR (for debugging)")
         sp.add_argument("--pattern", action="append", help="extra profile URL fragment, e.g. --pattern /consultant/")
         sp.add_argument("--user-agent", help="override the User-Agent header")
+        sp.add_argument("--show-browser", action="store_true", help="open a visible browser window (if a site blocks headless)")
         sp.add_argument("--allow-local", action="store_true", help="allow localhost/intranet URLs (demo site, internal sites)")
 
     s = sub.add_parser("scrape", help="crawl a site (or start from any page) and export doctors")
@@ -112,6 +114,8 @@ def main(argv=None) -> int:
         print(f"HTTP {page.status}  final URL: {page.final_url}  rendered: {page.rendered}  {page.error or ''}")
         for origin, st in fetcher.robots_status.items():
             print(f"robots.txt at {origin}: HTTP {st}")
+        if fetcher.browser_hosts:
+            print(f"Fetched with a real browser (site blocks plain HTTP): {', '.join(sorted(fetcher.browser_hosts))}")
         _doc_lines(extract_page(page))
         return 0 if not page.error else 1
     if a.cmd == "file":

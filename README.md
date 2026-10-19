@@ -10,16 +10,10 @@ From this folder in PowerShell:
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-```
-
-Or double-click `setup_windows.bat`.
-
-Optional, for hospital sites that build their pages with JavaScript (the scraper uses it only when a page comes back empty):
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
+
+Or double-click `setup_windows.bat`. The last line downloads Chromium (about 150 MB). The scraper uses it only when needed: when a site's firewall blocks plain HTTP clients (maxhealthcare.in does), or when a page is built by JavaScript.
 
 ## Check the install (2 minutes, no internet needed)
 
@@ -27,7 +21,7 @@ Optional, for hospital sites that build their pages with JavaScript (the scraper
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expect `23 passed` (or `22 passed, 1 skipped` without Playwright).
+Expect `25 passed`.
 
 Then try the fictional demo hospital. Window 1:
 
@@ -61,6 +55,7 @@ Open http://127.0.0.1:8000/, paste a URL, click **Start crawl**, watch progress,
 | Save every fetched page for debugging | add `--save-html html_dump` |
 | Keep all specialities, not only oncology | add `--all-specialties` |
 | Faster or politer | `--delay 1` (default 1.5 seconds between requests) |
+| Site blocks headless browsers | add `--show-browser` (opens a visible Chrome window) |
 | Bigger crawl | `--max-pages 500 --depth 5` |
 | Site uses an unusual profile URL | `--pattern /consultant/` |
 
@@ -87,7 +82,7 @@ Each page goes through these layers. When two layers disagree, the higher one wi
 | Labels and sections | `Experience: 20 years`, dt/dd, label/value divs, `<h3>Qualification</h3>` blocks | most hospital profile pages |
 | Listing cards and tables | doctor card grids (with or without "Dr."), faculty tables | find-a-doctor and department pages |
 | Text patterns | degrees (MBBS, MD, DM, MCh, DNB ...), designation, experience, fees, OPD timings, registration no., languages, city | anything left |
-| Browser render (optional) | the page after JavaScript runs | sites that load doctors by XHR |
+| Real browser (automatic) | the page as Chrome sees it, after JavaScript, scrolling and "load more" | firewalled sites, JavaScript sites |
 
 Oncology is decided from specialty, department, designation and sub-specialty (Medical, Surgical, Radiation, Haemato-Oncology, BMT, Paediatric, Gynae, Head and Neck, Breast, Uro, Neuro, GI, Thoracic, Musculoskeletal and more). A cardiologist whose bio mentions "cardio-oncology" is not counted.
 
@@ -117,16 +112,17 @@ Phone and email are taken only from explicit labels or `tel:`/`mailto:` links in
 
 1. Run `python -m oncoscraper page <one profile URL>` and look at the output.
 2. If fields are missing, run the crawl with `--save-html html_dump` and send the saved file for that page. It can be replayed offline with `python -m oncoscraper file html_dump\<file>.html` and a rule or template added.
-3. If the page comes back nearly empty, install Playwright (above) so JavaScript pages are rendered.
-4. If the log shows `HTTP 403 (bot check page)` or `robots.txt disallows`, that site blocks automated access; use another official source.
+3. `HTTP 403` on plain HTTP is handled automatically: the scraper switches that site to the real browser. The `page` command prints `Fetched with a real browser` when this happens.
+4. If it says `HTTP 403 even in a real browser`, try `--show-browser` (some firewalls block headless browsers). If that still fails, the site blocks automated access; use another official source.
+5. If it says `robots.txt disallows`, the hospital has asked crawlers to stay out of that page; the scraper respects it.
 
 ## Project layout
 
 ```
 oncoscraper/
-  fetch.py      HTTP, robots.txt, pacing, retries, bot-check fallback
+  fetch.py      HTTP, robots.txt, pacing, retries, switch to browser on 401/403/429/503
   robots.py     robots.txt parser with * and $ support
-  render.py     optional headless Chromium
+  render.py     real-browser fetching (firewalled and JavaScript sites)
   crawl.py      frontier, sitemaps, link scoring, duplicate merging
   extract.py    page classifier and layer orchestration
   structured.py JSON-LD, microdata, meta tags, embedded app JSON
@@ -138,5 +134,5 @@ oncoscraper/
   templates.py  optional per-site selectors
   export.py     Excel / CSV / JSON
   web.py        local web UI (static/index.html)
-tests/          fictional hospital site + 23 tests
+tests/          fictional hospital site, firewall simulator, 25 tests
 ```

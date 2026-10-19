@@ -5,3 +5,6 @@ openpyxl>=3.1,<4
 fastapi>=0.110
 uvicorn>=0.29
 brotli>=1.1
+# Real browser for sites whose firewall blocks plain HTTP (e.g. maxhealthcare.in)
+# and for JavaScript-only pages. After installing run:  python -m playwright install chromium
+playwright>=1.44

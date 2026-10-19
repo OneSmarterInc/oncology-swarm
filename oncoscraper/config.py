@@ -23,6 +23,7 @@ class ScrapeConfig:
     oncology_only: bool = True      # final output filter; all doctors are still kept in the "all" sheet
     use_sitemaps: bool = True
     render: str = "auto"            # never | auto | always  (auto needs Playwright installed)
+    show_browser: bool = False      # open a visible browser window (some firewalls block headless)
     user_agent: str = DEFAULT_USER_AGENT
     # Local/private addresses are refused unless explicitly allowed (tests, intranet sites).
     allow_private_hosts: bool = field(default_factory=lambda: os.getenv("ONCOSCRAPER_ALLOW_PRIVATE") == "1")
