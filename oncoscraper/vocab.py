@@ -81,7 +81,7 @@ def normalize_quals(text: str) -> str:
 HONORIFIC = r"(?:Dr|DR|Prof|PROF|Professor|PROFESSOR|Doctor(?=\s)|DOCTOR(?=\s))"
 _RANK = r"(?:Brig|Col|Lt\.?\s*Col|Maj|Gen|Lt\.?\s*Gen|Maj\.?\s*Gen|Surg\.?\s*(?:Cdr|Capt|Cmde)|Capt|Wg\.?\s*Cdr|Air\s*Cmde|Cdr|Retd|Prof|Dr)"
 _PREFIX_EXTRA = rf"(?:\(\s*{_RANK}\.?\s*(?:\(?retd\.?\)?)?\s*\)\s*|{_RANK}\.?\s+|{HONORIFIC}\.?\s+)"
-NAME_TOKEN = r"[A-Z][a-zA-Z'\u2019\-]*\.?"
+NAME_TOKEN = r"[A-Z](?:[a-zA-Z'\u2019\-]|\.(?=[A-Z]))*\.?"
 NAME_RE = re.compile(
     rf"(?<![A-Za-z]){HONORIFIC}\.?\s*{_PREFIX_EXTRA}{{0,3}}"
     rf"((?:{NAME_TOKEN}\s+){{0,4}}{NAME_TOKEN})"
@@ -106,7 +106,7 @@ def clean_name(raw: str) -> str | None:
     """Trim trailing non-name words and validate a captured name."""
     tokens = raw.replace("’", "'").split()
     if tokens and all(t.isupper() or len(t.strip(".")) <= 1 for t in tokens):
-        tokens = [t if len(t.strip(".")) <= 1 else t.capitalize() for t in tokens]
+        tokens = [t if len(t.strip(".")) <= 1 or "." in t.strip(".") else t.capitalize() for t in tokens]
     out: list[str] = []
     for tok in tokens:
         bare = tok.strip(".,")
