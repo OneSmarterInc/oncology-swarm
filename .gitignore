@@ -1,0 +1,20 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.xlsx
+*.log
+
+# Local credentials, generated research output, and private pilot artifacts
+.env.*
+!.env.example
+*.pem
+*.key
+exports/
+outputs/
+research_outputs/
+reports/live-pilot-v2.json
