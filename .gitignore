@@ -8,3 +8,4 @@ html_dump/
 tests/site/*.html
 tests/site/*/
 *_sites/
+!sources/*.xlsx
