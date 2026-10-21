@@ -219,6 +219,7 @@ class BatchJob:
         self.started = time.time()
         self.stop = threading.Event()
         self.xlsx: Path | None = None
+        self.live: dict = {}
 
     def on_event(self, e: dict) -> None:
         if e["event"] == "site_start":
@@ -240,7 +241,7 @@ class BatchJob:
             OUT_DIR.mkdir(exist_ok=True)
             out = OUT_DIR / f"batch-{time.strftime('%Y%m%d-%H%M%S')}-{self.id}.xlsx"
             self.xlsx = run_batch(self.sources, out, base, b.pages_per_site, resume=False,
-                                  progress=self._capture, stop_event=self.stop)
+                                  progress=self._capture, stop_event=self.stop, live=self.live)
             self.state = "stopped" if self.stop.is_set() else "done"
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
@@ -309,7 +310,19 @@ def batch_stop(job_id: str):
 @app.get("/api/batch/{job_id}/download.xlsx")
 def batch_download(job_id: str):
     job = BATCHES.get(job_id)
-    if not job or not job.xlsx:
-        raise HTTPException(404, "results not ready")
+    if not job:
+        raise HTTPException(404, "batch not found")
+    if not job.xlsx:  # still running: write what has been found so far
+        if not job.live.get("merger"):
+            raise HTTPException(404, "nothing found yet")
+        from .batch import snapshot_xlsx
+        OUT_DIR.mkdir(exist_ok=True)
+        part = OUT_DIR / f"batch-{job.id}-partial-{time.strftime('%H%M%S')}.xlsx"
+        try:
+            snapshot_xlsx(job.live, part)
+        except Exception as exc:
+            raise HTTPException(500, f"could not write partial Excel: {exc}") from None
+        return FileResponse(part, filename=part.name,
+                            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     return FileResponse(job.xlsx, filename=job.xlsx.name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

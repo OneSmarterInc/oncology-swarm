@@ -142,3 +142,35 @@ def test_web_batch_upload(site_url, tmp_path, monkeypatch):
     assert st["state"] == "done", st
     assert st["sites"][0]["oncologists"] == 3 and st["sites"][0]["with_email"] == 2
     assert client.get(f"/api/batch/{jid}/download.xlsx").content[:2] == b"PK"
+
+
+def test_partial_excel_while_batch_runs(site_url, tmp_path, monkeypatch):
+    """The combined Excel can be downloaded at any time; it holds finished hospitals and the one in progress."""
+    from oncoscraper.batch import run_batch, snapshot_xlsx
+    from oncoscraper.config import ScrapeConfig
+    from oncoscraper.sources import Source
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    srcs = [Source(row=2, hospital="Sunrise Faculty", urls=[f"{site_url}/faculty/radiation-oncology"]),
+            Source(row=3, hospital="Sunrise Cancer Care", urls=[f"{site_url}/specialities/cancer-care"])]
+    live, snaps = {}, []
+
+    def progress(e):
+        if e["event"] == "page" and live.get("src") and live["src"].row == 3 and not snaps:
+            snaps.append(snapshot_xlsx(live, tmp_path / "part.xlsx"))
+
+    run_batch(srcs, tmp_path / "all.xlsx", ScrapeConfig(delay_seconds=0, render="never", use_sitemaps=False,
+                                                        allow_private_hosts=True),
+              per_site_pages=3, resume=False, progress=progress, live=live)
+    wb = load_workbook(snaps[0])
+    hosp = {r[1].value: r[2].value for r in wb["Hospitals"].iter_rows(min_row=2)}
+    assert hosp == {"Sunrise Faculty": "done", "Sunrise Cancer Care": "in progress"}
+    names = {r[0].value for r in wb["Oncologists"].iter_rows(min_row=2)}
+    assert "Dr. Harish Chandra" in names and len(names) > 3
+
+
+def test_dead_links_are_reported_separately():
+    from oncoscraper.batch import _failure_note
+    pages = [{"note": "HTTP 404"}] * 9 + [{"note": "HTTP 500"}]
+    note = _failure_note(pages, 150)
+    assert note.startswith("1 of 150 pages could not be read") and "9 dead links on the site" in note
+    assert _failure_note([{"note": "HTTP 404"}], 150) == "1 dead link on the site (404, page removed)"

@@ -79,7 +79,7 @@ a { color:var(--accent); }
     <div class="tablewrap" style="margin-top:10px"><table>
       <thead><tr><th>Row</th><th>Hospital</th><th>Status</th><th>Pages</th><th>Oncologists</th><th>With doctor phone</th><th>With doctor email</th><th>With any contact</th><th>Note</th></tr></thead>
       <tbody id="b-sites"></tbody></table></div>
-    <div class="row" id="b-dl" hidden><a id="b-dl-xlsx"><button type="button">Download combined Excel</button></a><span class="hint" id="b-totals"></span></div>
+    <div class="row" id="b-dl" hidden><a id="b-dl-xlsx"><button type="button" id="b-dl-btn">Download combined Excel</button></a><span class="hint" id="b-totals"></span></div>
   </div>
 </section>
 
@@ -224,7 +224,9 @@ $('b-start').onclick = async () => {
   const r = await fetch('/api/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const j = await r.json();
   if (!r.ok) { $('b-status').textContent = j.detail || 'Could not start'; return; }
-  batchId = j.id; $('b-progress').hidden = false; $('b-dl').hidden = true; $('b-sites').innerHTML = '';
+  batchId = j.id; $('b-progress').hidden = false; $('b-sites').innerHTML = '';
+  $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
+  $('b-dl-btn').textContent = 'Download results so far'; $('b-totals').textContent = 'Partial file: finished hospitals plus the one being crawled now.';
   $('b-status').textContent = `${j.hospitals} hospitals queued` + (j.problems.length ? `, ${j.problems.length} rows skipped` : '');
   $('b-start').disabled = true; $('b-stop').disabled = false;
   clearInterval(batchTimer); batchTimer = setInterval(pollBatch, 2000); pollBatch();
@@ -243,6 +245,7 @@ async function pollBatch() {
     if (j.error) $('b-status').textContent = j.error;
     if (j.stats) {
       $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
+      $('b-dl-btn').textContent = 'Download combined Excel';
       $('b-totals').textContent = `${j.stats.oncologists} oncologists: ${j.stats.oncologists_with_doctor_phone} with doctor phone, ${j.stats.oncologists_with_doctor_email} with doctor email, ${j.stats.oncologists_with_any_contact} with any contact.`;
     }
   }

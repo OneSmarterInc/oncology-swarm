@@ -46,9 +46,64 @@ def _reason(note: str) -> str:
     return note[:80] or "unknown"
 
 
+def _failure_note(failed: list[dict], total: int) -> str:
+    """Readable summary. Dead links (404/410) are links on the hospital's own site to pages
+    that no longer exist; they are reported separately from real failures."""
+    reasons = Counter(_reason(p.get("note") or "") for p in failed)
+    dead = reasons.pop("HTTP 404", 0) + reasons.pop("HTTP 410", 0)
+    parts = []
+    if dead:
+        parts.append(f"{dead} dead link{'s' if dead > 1 else ''} on the site (404, page removed)")
+    for r, n in reasons.most_common(3):
+        label = {"HTTP 500": "server error (500)", "HTTP 502": "server error (502)", "HTTP 503": "server busy (503)"}.get(r, r)
+        parts.append(f"{n} {label}")
+    if not dead or reasons:
+        return f"{sum(reasons.values())} of {total} pages could not be read: " + "; ".join(parts)
+    return "; ".join(parts)
+
+
+def snapshot_xlsx(live: dict, out: str | Path) -> Path:
+    """Write what has been found so far (finished hospitals + the one in progress)."""
+    merger = Merger()
+    for d in list(live.get("merger").records if live.get("merger") else []):
+        merger.add(DoctorRecord.from_full_dict(d.to_full_dict()))
+    pages = list(live.get("pages") or [])
+    summary = [dict(r) for r in live.get("summary") or []]
+    crawler, src = live.get("crawler"), live.get("src")
+    if crawler is not None and src is not None:
+        for d in list(crawler.merger.records):
+            c = DoctorRecord.from_full_dict(d.to_full_dict())
+            c.source_hospital = src.hospital
+            merger.add(c)
+        onco = [d for d in crawler.merger.records if d.is_oncology]
+        summary.append({"row": src.row, "hospital": src.hospital, "status": "in progress",
+                        "pages": "", "doctors": len(crawler.merger.records), "oncologists": len(onco),
+                        "with_phone": sum(1 for d in onco if d.get("phone")),
+                        "with_email": sum(1 for d in onco if d.get("email")),
+                        "with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
+                        "start_urls": " ".join(src.urls), "note": "partial: crawl still running"})
+    demote_shared(merger.records)
+    sources = live.get("sources") or []
+    result = CrawlResult([u for s in sources for u in s.urls], merger.records, pages)
+    onco = result.oncologists
+    result.stats = {
+        "partial": "yes - downloaded while the batch was running",
+        "hospitals_finished": len(live.get("summary") or []), "hospitals_total": len(sources),
+        "pages_fetched": len(pages), "doctors_found": len(result.doctors), "oncologists": len(onco),
+        "oncologists_with_doctor_phone": sum(1 for d in onco if d.get("phone")),
+        "oncologists_with_doctor_email": sum(1 for d in onco if d.get("email")),
+        "oncologists_with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
+        "seconds": round(time.time() - live.get("t0", time.time()), 1),
+    }
+    return to_xlsx(result, out, sites=summary)
+
+
+CONTACT_FIELDS = ("phone", "email", "contact_phone", "contact_email")
+
+
 def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_site_pages: int,
               resume: bool = True, progress: Callable[[dict], None] | None = None,
-              stop_event: threading.Event | None = None) -> Path:
+              stop_event: threading.Event | None = None, live: dict | None = None) -> Path:
     progress = progress or (lambda e: None)
     stop_event = stop_event or threading.Event()
     out = Path(out)
@@ -58,6 +113,8 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
     pages: list[PageLog] = []
     summary: list[dict] = []
     t0 = time.time()
+    if live is not None:  # lets the web UI write a partial Excel at any time
+        live.update(merger=merger, pages=pages, summary=summary, sources=sources, crawler=None, src=None, t0=t0)
     for i, src in enumerate(sources, 1):
         if stop_event.is_set():
             break
@@ -76,7 +133,10 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
                 "render": src.render or base.render,
             })
             try:
-                res = Crawler(cfg, progress, stop_event).run(src.urls)
+                crawler = Crawler(cfg, progress, stop_event)
+                if live is not None:
+                    live.update(crawler=crawler, src=src)
+                res = crawler.run(src.urls)
                 data = {"hospital": src.hospital, "urls": src.urls, "stats": res.stats,
                         "doctors": [d.to_full_dict() for d in res.doctors],
                         "pages": [p.__dict__ for p in res.pages], "error": None}
@@ -93,14 +153,14 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
             d.source_hospital = src.hospital
             merger.add(d)
         pages.extend(PageLog(**p) for p in data["pages"])
+        if live is not None:
+            live.update(crawler=None, src=None)
         onco = [d for d in docs if d.is_oncology]
         failed = [p for p in data["pages"] if p["page_type"] == "error"]
         robots = sum(1 for p in failed if "robots.txt" in (p.get("note") or ""))
         note = data.get("error") or ""
         if not note and failed:
-            reasons = Counter(_reason(p.get("note") or "") for p in failed)
-            top = "; ".join(f"{r} x{n}" if n > 1 else r for r, n in reasons.most_common(2))
-            note = f"{len(failed)} of {len(data['pages'])} pages failed: {top}"
+            note = _failure_note(failed, len(data["pages"]))
         if src.warnings:
             note = (note + "; " if note else "") + "; ".join(src.warnings)
         summary.append({
