@@ -1,10 +1,8 @@
 """Polite HTTP fetcher: robots.txt, per-host pacing, retries, size cap, optional browser render."""
 from __future__ import annotations
 
-import functools
 import ipaddress
 import logging
-import socket
 import threading
 import time
 from pathlib import Path
@@ -66,17 +64,21 @@ def _is_ssl_or_proxy(exc: Exception) -> bool:
     return any(k in text for k in ("certificate", "ssl", "proxy", "tls", "handshake"))
 
 
-@functools.lru_cache(maxsize=512)
 def _is_public(host: str) -> bool:
+    """Refuse localhost and literal private IPs only.
+
+    Host names are not checked by their DNS answer: VPNs, antivirus and office
+    DNS often map real hospital sites to private or reserved addresses
+    (e.g. 198.18.x.x), which made every site look "local".
+    """
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
     try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return True  # let the HTTP request surface the DNS error
-    for info in infos:
-        addr = ipaddress.ip_address(info[4][0])
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
-            return False
-    return True
+        addr = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return True  # a normal host name
+    return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast)
 
 
 class Fetcher:
