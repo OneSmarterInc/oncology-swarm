@@ -21,6 +21,20 @@ LINK_TEXT_HINT = re.compile(r"view|profile|know more|read more|details|more info
 BOOKING = re.compile(r"book|appointment|enquir|call|whatsapp|video|consult-online|teleconsult", re.I)
 
 
+def _name_from_parts(el: Tag) -> str | None:
+    """Read the name from the element's text pieces in order, stopping once a full name is
+    found, so a speciality in the next piece ("Dr. X" then "Uro Oncology") is not glued on."""
+    parts = [p for p in el.get_text("\n", strip=True).split("\n") if p.strip()]
+    best = None
+    for k in range(1, len(parts) + 1):
+        name = find_name_in_text(" ".join(parts[:k]))
+        if name:
+            best = name
+            if len(name.split()) >= 3:  # honorific + at least two name words
+                return name
+    return best
+
+
 def _name_nodes(main: Tag) -> list[tuple[Tag, str]]:
     """Smallest elements whose whole text is a doctor's name (optionally with trailing degree)."""
     out: list[tuple[Tag, str]] = []
@@ -28,7 +42,7 @@ def _name_nodes(main: Tag) -> list[tuple[Tag, str]]:
         text = " ".join(el.get_text(" ", strip=True).split())
         if not text or len(text) > 90:
             continue
-        name = find_name_in_text(text)
+        name = _name_from_parts(el)
         if not name or not re.match(r"^\s*(?:Dr|Prof|Doctor|Professor)\b", text, re.I):
             continue
         # Skip if a child already carries the same name (keep the smallest node).

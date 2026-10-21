@@ -87,6 +87,11 @@ NAME_RE = re.compile(
     rf"((?:{NAME_TOKEN}\s+){{0,4}}{NAME_TOKEN})"
 )
 NAME_STOP = {
+    # speciality words that often follow a name on a card ("Dr. X | Uro Oncology")
+    "Uro", "Urology", "Gynae", "Gyne", "Gynaec", "Gynecologic", "Gynaecologic", "Onco", "Neuro", "Breast",
+    "Thoracic", "Lung", "Gastro", "GI", "Hepato", "Ortho", "Musculoskeletal", "Bone", "Blood", "Nuclear",
+    "Robotic", "Molecular", "Palliative", "Preventive", "Clinical", "Interventional", "Transplant", "BMT",
+    "Plastic", "Reconstructive", "Pathology", "Radiology", "Radiotherapy", "Hematology", "Haematology",
     "MBBS", "MD", "MS", "DM", "MCh", "DNB", "Consultant", "Senior", "Director", "Head", "Department",
     "Oncology", "Oncologist", "Cancer", "Hospital", "Hospitals", "Profile", "Book", "Appointment",
     "Associate", "Assistant", "Professor", "Chairman", "Chief", "Unit", "Specialist", "Surgeon",

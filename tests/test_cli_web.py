@@ -174,3 +174,17 @@ def test_dead_links_are_reported_separately():
     note = _failure_note(pages, 150)
     assert note.startswith("1 of 150 pages could not be read") and "9 dead links on the site" in note
     assert _failure_note([{"note": "HTTP 404"}], 150) == "1 dead link on the site (404, page removed)"
+
+
+def test_evidence_has_one_row_per_doctor_and_field(site_url, tmp_path, monkeypatch):
+    from oncoscraper.batch import run_batch
+    from oncoscraper.config import ScrapeConfig
+    from oncoscraper.sources import Source
+    out = run_batch([Source(row=2, hospital="Sunrise", urls=[f"{site_url}/specialities/cancer-care"])],
+                    tmp_path / "e.xlsx", ScrapeConfig(delay_seconds=0, render="never", use_sitemaps=False,
+                                                      allow_private_hosts=True), per_site_pages=15, resume=False)
+    wb = load_workbook(out)
+    pairs = [(r[0].value, r[1].value) for r in wb["Evidence"].iter_rows(min_row=2)]
+    assert pairs and len(pairs) == len(set(pairs))
+    names = [r[0].value for r in wb["Oncologists"].iter_rows(min_row=2)]
+    assert len(names) == len(set(names))

@@ -71,9 +71,17 @@ def to_xlsx(result: CrawlResult, path: str | Path, sites: list[dict] | None = No
     _sheet(wb, "Oncologists", headers, [row(d) for d in onco], widths)
     _sheet(wb, "All doctors", headers, [row(d) for d in sorted(result.doctors, key=lambda d: d.get("name") or "")], widths)
     ev_rows = []
+    # One row per doctor and field: several values (e.g. a list of awards) are joined, not repeated.
     for d in result.doctors:
+        grouped: dict[str, dict] = {}
         for e in d.evidence:
-            ev_rows.append([d.get("name"), e.field, _cell(e.value), e.layer, _cell(e.snippet), e.source_url])
+            g = grouped.setdefault(e.field, {"values": [], "layers": [], "snippet": e.snippet, "urls": []})
+            for bucket, item in (("values", _cell(e.value)), ("layers", e.layer), ("urls", e.source_url)):
+                if item and item not in g[bucket]:
+                    g[bucket].append(item)
+        for field_name, g in grouped.items():
+            ev_rows.append([d.get("name"), field_name, "; ".join(map(str, g["values"])), ", ".join(g["layers"]),
+                            _cell(g["snippet"]), " ".join(g["urls"])])
     _sheet(wb, "Evidence", ["Doctor", "Field", "Value", "Found by", "Page text", "Page URL"], ev_rows,
            {"Page text": 70, "Value": 40, "Page URL": 45})
     _sheet(wb, "Pages", ["URL", "HTTP status", "Page type", "Doctors on page", "Depth", "Note"],
