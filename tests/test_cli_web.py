@@ -85,12 +85,60 @@ def test_batch_csv_with_resume(site_url, tmp_path, capsys, monkeypatch):
     assert main(args) == 0
     wb = load_workbook(out)
     assert wb.sheetnames[:2] == ["Summary", "Hospitals"]
-    hosp = {r[0].value: r for r in wb["Hospitals"].iter_rows(min_row=2)}
+    hosp = {r[1].value: r for r in wb["Hospitals"].iter_rows(min_row=2)}
     assert set(hosp) == {"Sunrise Cancer Care", "Sunrise Faculty"}
     header = [c.value for c in wb["Oncologists"][1]]
     rows = [dict(zip(header, [c.value for c in r])) for r in wb["Oncologists"].iter_rows(min_row=2)]
     hc = next(r for r in rows if r["Name"] == "Dr. Harish Chandra")
-    assert hc["Email"] == "hchandra@inst.example" and hc["Source Hospital"] == "Sunrise Faculty"
+    assert hc["Doctor Email"] == "hchandra@inst.example" and hc["Source Hospital"] == "Sunrise Faculty"
     # Second run resumes from saved per-site results without crawling again.
     assert main(args) == 0
     assert "resumed" in capsys.readouterr().out
+
+
+def test_excel_template_round_trip(tmp_path):
+    from oncoscraper.sources import read_sources, write_template
+    rows = [
+        {"hospital_name": "Alpha Cancer Centre", "oncology_page_urls": "https://alpha.example/oncology\nhttps://alpha.example/team",
+         "sample_profile_url": "https://alpha.example/doctor/dr-a-b", "max_pages": "40", "use_browser": "always"},
+        {"hospital_name": "Beta Hospital", "official_website": "beta.example"},
+        {"hospital_name": "Gamma", "doctors_list_urls": "https://gamma.example/list.pdf"},
+        {"hospital_name": "Delta", "official_website": "https://delta.example", "enabled": "no"},
+        {"official_website": "https://www.epsilon.example/", "sample_profile_url": "https://www.epsilon.example/dr-ravi-kant/"},
+    ]
+    path = write_template(tmp_path / "list.xlsx", rows)
+    sources, problems = read_sources(path)
+    by = {s.hospital: s for s in sources}
+    a = by["Alpha Cancer Centre"]
+    assert a.urls == ["https://alpha.example/oncology", "https://alpha.example/team", "https://alpha.example/doctor/dr-a-b"]
+    assert a.patterns == ["/doctor/"] and a.max_pages == 40 and a.render == "always"
+    assert by["Beta Hospital"].urls == ["https://beta.example/"]
+    assert by["www.epsilon.example"].patterns == ["/dr-"]
+    probs = {p.hospital: p.problem for p in problems}
+    assert "PDF" not in probs.get("Gamma", "") and "no usable URL" in probs["Gamma"]
+    assert probs["Delta"].startswith("skipped")
+
+
+def test_web_batch_upload(site_url, tmp_path, monkeypatch):
+    import base64
+    from oncoscraper.sources import write_template
+    monkeypatch.setattr(web, "OUT_DIR", tmp_path)
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    path = write_template(tmp_path / "up.xlsx", [
+        {"hospital_name": "Sunrise Faculty", "oncology_page_urls": f"{site_url}/faculty/radiation-oncology"},
+        {"hospital_name": "Broken row"}])
+    client = TestClient(web.app)
+    assert client.get("/api/template.xlsx").content[:2] == b"PK"
+    payload = {"filename": "up.xlsx", "content_base64": base64.b64encode(path.read_bytes()).decode()}
+    check = client.post("/api/sources/check", json=payload).json()
+    assert check["usable"] == 1 and check["problems"][0]["hospital"] == "Broken row"
+    jid = client.post("/api/batch", json={**payload, "pages_per_site": 1, "delay_seconds": 0, "render": "never",
+                                          "use_sitemaps": False}).json()["id"]
+    for _ in range(100):
+        st = client.get(f"/api/batch/{jid}").json()
+        if st["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert st["state"] == "done", st
+    assert st["sites"][0]["oncologists"] == 3 and st["sites"][0]["with_email"] == 2
+    assert client.get(f"/api/batch/{jid}/download.xlsx").content[:2] == b"PK"

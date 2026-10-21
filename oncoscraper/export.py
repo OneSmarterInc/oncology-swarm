@@ -13,9 +13,12 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from .crawl import CrawlResult
 from .models import ALL_FIELDS, LIST_FIELDS, DoctorRecord
 
-COLUMNS = ["name", "designation", "specialty", "sub_specialties", "department", "qualifications", "experience_years",
-           "hospital", "city", "languages", "expertise", "opd_timings", "consultation_fee", "registration", "phone",
-           "email", "contact_email", "education", "awards", "about", "photo_url"]
+COLUMNS = ["name", "designation", "specialty", "sub_specialties", "department", "hospital", "city",
+           "phone", "email", "contact_phone", "contact_email",
+           "qualifications", "experience_years", "languages", "expertise", "opd_timings", "consultation_fee",
+           "registration", "education", "awards", "about", "photo_url"]
+HEADERS = {"phone": "Doctor Phone", "email": "Doctor Email", "contact_phone": "Hospital / Desk Phone",
+           "contact_email": "Hospital / Desk Email"}
 assert set(COLUMNS) == set(ALL_FIELDS)
 META_COLUMNS = ["source_hospital", "profile_url", "source_url", "found_on", "is_oncology", "oncology_score",
                 "oncology_terms", "page_type", "fields_filled"]
@@ -62,7 +65,7 @@ def to_xlsx(result: CrawlResult, path: str | Path, sites: list[dict] | None = No
     path = Path(path)
     wb = Workbook()
     wb.remove(wb.active)
-    headers = [c.replace("_", " ").title() for c in COLUMNS + META_COLUMNS]
+    headers = [HEADERS.get(c) or c.replace("_", " ").title() for c in COLUMNS + META_COLUMNS]
     widths = {"About": 60, "Expertise": 45, "Profile Url": 45, "Source Url": 45, "Found On": 40}
     onco = sorted(result.oncologists, key=lambda d: (d.get("hospital") or "", d.get("name") or ""))
     _sheet(wb, "Oncologists", headers, [row(d) for d in onco], widths)
@@ -84,7 +87,8 @@ def to_xlsx(result: CrawlResult, path: str | Path, sites: list[dict] | None = No
     _sheet(wb, "Summary", ["Item", "Value"], summary, {"Item": 32, "Value": 80})
     wb.move_sheet("Summary", offset=-4)
     if sites:
-        keys = ["hospital", "status", "pages", "doctors", "oncologists", "with_email", "start_urls", "note"]
+        keys = ["row", "hospital", "status", "pages", "doctors", "oncologists", "with_phone", "with_email",
+                "with_any_contact", "start_urls", "note"]
         _sheet(wb, "Hospitals", [k.replace("_", " ").title() for k in keys],
                [[_cell(s.get(k)) for k in keys] for s in sites], {"Start Urls": 70, "Note": 50})
         wb.move_sheet("Hospitals", offset=-(len(wb.sheetnames) - 2))

@@ -33,6 +33,8 @@ table { width:100%; border-collapse:collapse; font-size:13px; }
 th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { background:var(--bg); position:sticky; top:0; }
 .tablewrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+td.contact { white-space:nowrap; font-weight:600; } td.muted { color:var(--muted); font-size:12px; }
+.ok { color:var(--ok); } .warn { color:#9a6700; } .bad { color:var(--bad); }
 .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:#e3efef; color:var(--accent-2); }
 .state { font-weight:700; } .state.failed { color:var(--bad); } .state.done { color:var(--ok); }
 pre.json { background:var(--bg); padding:12px; border-radius:8px; overflow:auto; max-height:420px; font-size:12px; }
@@ -48,7 +50,41 @@ a { color:var(--accent); }
 <header><h1>OncoScraper</h1><p>Give a hospital website, find-a-doctor page, department page or a single doctor profile. Finds oncologists using rules only, no API key.</p></header>
 <main>
 <section class="card">
-  <h2>1. Start a crawl</h2>
+  <h2>Crawl a hospital list (Excel)</h2>
+  <p class="hint" style="margin-top:0">One row per hospital in the standard template. The crawler stays on the websites in your file; there is no separate allow-list to edit.</p>
+  <div class="row" style="margin-top:6px">
+    <a href="/api/template.xlsx"><button class="secondary" type="button">Download blank template</button></a>
+    <input type="file" id="b-file" accept=".xlsx,.csv" style="flex:1;min-width:240px">
+    <button id="b-check" class="secondary" type="button">Check file</button>
+  </div>
+  <div id="b-check-out" hidden style="margin-top:12px"></div>
+  <div class="grid">
+    <div><label for="b-pages">Pages per hospital</label><input id="b-pages" type="number" value="150" min="1" max="5000"></div>
+    <div><label for="b-delay">Delay between requests (s)</label><input id="b-delay" type="number" value="1.5" step="0.5" min="0"></div>
+    <div><label for="b-render">JavaScript / firewalled sites</label><select id="b-render"><option value="auto">Auto browser</option><option value="never">Never</option><option value="always">Always browser</option></select></div>
+    <label class="check"><input type="checkbox" id="b-all"> Keep all specialities</label>
+    <label class="check"><input type="checkbox" id="b-sitemap" checked> Use sitemap.xml</label>
+  </div>
+  <div class="row"><button id="b-start" type="button">Start batch</button><button id="b-stop" class="secondary" type="button" disabled>Stop</button>
+    <span class="hint" id="b-status"></span></div>
+  <div id="b-progress" hidden>
+    <div class="bar"><i id="b-bar"></i></div>
+    <div class="stats">
+      <div class="stat"><span>Hospital</span><b id="b-idx">0/0</b></div>
+      <div class="stat"><span>Pages (this hospital)</span><b id="b-pagesnow">0</b></div>
+      <div class="stat"><span>Oncologists (this hospital)</span><b id="b-onconow">0</b></div>
+      <div class="stat"><span>Elapsed</span><b id="b-time">0s</b></div>
+    </div>
+    <p class="hint" id="b-current"></p>
+    <div class="tablewrap" style="margin-top:10px"><table>
+      <thead><tr><th>Row</th><th>Hospital</th><th>Status</th><th>Pages</th><th>Oncologists</th><th>With doctor phone</th><th>With doctor email</th><th>With any contact</th><th>Note</th></tr></thead>
+      <tbody id="b-sites"></tbody></table></div>
+    <div class="row" id="b-dl" hidden><a id="b-dl-xlsx"><button type="button">Download combined Excel</button></a><span class="hint" id="b-totals"></span></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Crawl one website</h2>
   <label for="urls">Start URL(s), one per line</label>
   <textarea id="urls" placeholder="https://www.hospital-website.in/find-a-doctor"></textarea>
   <div class="grid">
@@ -65,7 +101,7 @@ a { color:var(--accent); }
 </section>
 
 <section class="card" id="progress-card" hidden>
-  <h2>2. Progress <span id="state" class="state"></span></h2>
+  <h2>Progress <span id="state" class="state"></span></h2>
   <div class="stats">
     <div class="stat"><span>Pages fetched</span><b id="s-fetched">0</b></div>
     <div class="stat"><span>Queued</span><b id="s-queued">0</b></div>
@@ -84,10 +120,10 @@ a { color:var(--accent); }
 </section>
 
 <section class="card" id="results-card" hidden>
-  <h2>3. Results <span class="pill" id="count"></span></h2>
+  <h2>Results <span class="pill" id="count"></span></h2>
   <input id="filter" placeholder="Filter by name, hospital, city or specialty">
   <div class="tablewrap" style="margin-top:10px"><table>
-    <thead><tr><th>Name</th><th>Designation</th><th>Specialty</th><th>Qualifications</th><th>Exp.</th><th>Hospital</th><th>City</th><th>Fields</th><th>Source</th></tr></thead>
+    <thead><tr><th>Name</th><th>Designation</th><th>Specialty</th><th>Doctor phone</th><th>Doctor email</th><th>Hospital / desk contact</th><th>Hospital</th><th>City</th><th>Qualifications</th><th>Exp.</th><th>Source</th></tr></thead>
     <tbody id="rows"></tbody></table></div>
 </section>
 
@@ -147,8 +183,10 @@ function render() {
   const shown = rows.filter(d => !q || JSON.stringify(d).toLowerCase().includes(q));
   $('count').textContent = shown.length + ' doctors';
   $('rows').innerHTML = shown.map(d => `<tr><td><b>${esc(d.name)}</b>${d.page_type==='profile' ? '' : ' <span class="pill">card</span>'}</td>
-    <td>${esc(d.designation)}</td><td>${esc(d.specialty || list(d.sub_specialties))}</td><td>${esc(list(d.qualifications))}</td>
-    <td>${esc(d.experience_years)}</td><td>${esc(d.hospital)}</td><td>${esc(d.city)}</td><td>${d.fields}</td>
+    <td>${esc(d.designation)}</td><td>${esc(d.specialty || list(d.sub_specialties))}</td>
+    <td class="contact">${esc(d.phone)}</td><td class="contact">${esc(d.email)}</td>
+    <td class="muted">${esc([d.contact_phone, d.contact_email].filter(Boolean).join('; '))}</td>
+    <td>${esc(d.hospital)}</td><td>${esc(d.city)}</td><td>${esc(list(d.qualifications))}</td><td>${esc(d.experience_years)}</td>
     <td><a href="${esc(safeUrl(d.profile_url || d.source_url))}" target="_blank" rel="noopener">open</a></td></tr>`).join('');
 }
 $('filter').oninput = render;
@@ -159,6 +197,56 @@ $('page-btn').onclick = async () => {
   const r = await fetch('/api/page', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, render:$('render').value})});
   $('page-out').textContent = JSON.stringify(await r.json(), null, 2);
 };
+
+// ---- batch upload ----------------------------------------------------------
+let batchId = null, batchTimer = null;
+async function fileBody() {
+  const f = $('b-file').files[0];
+  if (!f) { alert('Choose an .xlsx or .csv file first'); return null; }
+  const buf = new Uint8Array(await f.arrayBuffer());
+  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return { filename: f.name, content_base64: btoa(bin) };
+}
+$('b-check').onclick = async () => {
+  const body = await fileBody(); if (!body) return;
+  const r = await fetch('/api/sources/check', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json(); const out = $('b-check-out'); out.hidden = false;
+  if (!r.ok) { out.innerHTML = `<p class="bad">${esc(j.detail || 'Could not read file')}</p>`; return; }
+  const rows = j.sources.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td>${s.urls.length}</td><td>${esc(s.patterns.join(' '))}</td><td class="warn">${esc(s.warnings.join('; '))}</td></tr>`).join('');
+  const probs = j.problems.map(p => `<tr><td>${p.row}</td><td>${esc(p.hospital)}</td><td colspan="3" class="bad">${esc(p.problem)}</td></tr>`).join('');
+  out.innerHTML = `<p><b class="ok">${j.usable} hospitals ready</b>${j.problems.length ? `, <b class="bad">${j.problems.length} rows need attention</b>` : ''}</p>
+    <div class="tablewrap"><table><thead><tr><th>Row</th><th>Hospital</th><th>Start URLs</th><th>Profile pattern</th><th>Warnings / problems</th></tr></thead><tbody>${probs}${rows}</tbody></table></div>`;
+};
+$('b-start').onclick = async () => {
+  const body = await fileBody(); if (!body) return;
+  Object.assign(body, { pages_per_site:+$('b-pages').value, delay_seconds:+$('b-delay').value, render:$('b-render').value,
+    all_specialties:$('b-all').checked, use_sitemaps:$('b-sitemap').checked });
+  const r = await fetch('/api/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) { $('b-status').textContent = j.detail || 'Could not start'; return; }
+  batchId = j.id; $('b-progress').hidden = false; $('b-dl').hidden = true; $('b-sites').innerHTML = '';
+  $('b-status').textContent = `${j.hospitals} hospitals queued` + (j.problems.length ? `, ${j.problems.length} rows skipped` : '');
+  $('b-start').disabled = true; $('b-stop').disabled = false;
+  clearInterval(batchTimer); batchTimer = setInterval(pollBatch, 2000); pollBatch();
+};
+$('b-stop').onclick = async () => { if (batchId) await fetch(`/api/batch/${batchId}/stop`, {method:'POST'}); $('b-stop').disabled = true; };
+async function pollBatch() {
+  const r = await fetch(`/api/batch/${batchId}`); if (!r.ok) return; const j = await r.json();
+  $('b-idx').textContent = `${j.index}/${j.total}`; $('b-time').textContent = j.elapsed + 's';
+  $('b-pagesnow').textContent = j.progress.fetched || 0; $('b-onconow').textContent = j.progress.oncologists || 0;
+  $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
+  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}` : `Batch ${j.state}`;
+  $('b-sites').innerHTML = j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${s.status==='error'?'bad':'ok'}">${esc(s.status)}</td>
+    <td>${s.pages}</td><td>${s.oncologists}</td><td>${s.with_phone}</td><td>${s.with_email}</td><td>${s.with_any_contact}</td><td class="muted">${esc(s.note)}</td></tr>`).join('');
+  if (j.state !== 'running') {
+    clearInterval(batchTimer); $('b-start').disabled = false; $('b-stop').disabled = true;
+    if (j.error) $('b-status').textContent = j.error;
+    if (j.stats) {
+      $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
+      $('b-totals').textContent = `${j.stats.oncologists} oncologists: ${j.stats.oncologists_with_doctor_phone} with doctor phone, ${j.stats.oncologists_with_doctor_email} with doctor email, ${j.stats.oncologists_with_any_contact} with any contact.`;
+    }
+  }
+}
 </script>
 </body>
 </html>

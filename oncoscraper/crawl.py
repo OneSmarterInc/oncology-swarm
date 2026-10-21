@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 from .config import ScrapeConfig
+from .contacts import demote_shared
 from .dom import same_site
 from .extract import extract_page
 from .fetch import Fetcher, normalize_url
@@ -266,6 +267,7 @@ class Crawler:
         finally:
             self.fetcher.close()
         result.doctors = self.merger.records
+        demote_shared(result.doctors)
         result.stats = {
             "pages_fetched": fetched, "requests": self.fetcher.requests_made, "page_types": counts,
             "doctors_found": len(result.doctors), "oncologists": len(result.oncologists),

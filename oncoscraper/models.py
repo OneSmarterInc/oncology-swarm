@@ -7,7 +7,7 @@ from typing import Any
 # Fields every doctor record can carry. Order is the export column order.
 SCALAR_FIELDS = (
     "name", "designation", "specialty", "department", "hospital", "city",
-    "experience_years", "registration", "consultation_fee", "phone", "email", "contact_email",
+    "experience_years", "registration", "consultation_fee", "phone", "contact_phone", "email", "contact_email",
     "photo_url", "about",
 )
 LIST_FIELDS = (

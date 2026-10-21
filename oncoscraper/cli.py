@@ -72,12 +72,15 @@ def main(argv=None) -> int:
     common(s)
 
     b = sub.add_parser("batch", help="crawl every hospital in a CSV list and combine the results")
-    b.add_argument("csv", help="hospital list, e.g. sources/india_hospitals.csv")
+    b.add_argument("file", help="hospital list in the standard template (.xlsx or .csv)")
     b.add_argument("--out", default="india_oncologists.xlsx", help="combined Excel file (default india_oncologists.xlsx)")
     b.add_argument("--pages-per-site", type=int, default=150, help="page budget for each hospital (default 150)")
     b.add_argument("--only", help="only hospitals whose name contains this text, e.g. --only Apollo")
     b.add_argument("--no-resume", action="store_true", help="re-crawl hospitals that already finished")
     common(b)
+
+    t = sub.add_parser("template", help="write the blank hospital-list Excel template")
+    t.add_argument("--out", default="hospital_list_template.xlsx")
 
     pg = sub.add_parser("page", help="fetch ONE page and print what was extracted (no crawling)")
     pg.add_argument("url")
@@ -112,13 +115,23 @@ def main(argv=None) -> int:
               f"{st['oncologists']} oncologists ({st['profiles_fetched']} with full profile pages).")
         print(f"Saved: {path.resolve()}")
         return 0
+    if a.cmd == "template":
+        from .sources import write_template
+        print(f"Template saved: {write_template(a.out).resolve()}")
+        return 0
     if a.cmd == "batch":
-        from .batch import read_sources, run_batch
-        sources = read_sources(a.csv)
+        from .batch import run_batch
+        from .sources import read_sources
+        sources, problems = read_sources(a.file)
         if a.only:
-            sources = [s for s in sources if a.only.lower() in s["hospital"].lower()]
+            sources = [s for s in sources if a.only.lower() in s.hospital.lower()]
+        for p_ in problems:
+            print(f"  row {p_.row} {p_.hospital}: {p_.problem}")
+        for s_ in sources:
+            for w in s_.warnings:
+                print(f"  row {s_.row} {s_.hospital}: {w}")
         if not sources:
-            print("No hospitals with a URL found in", a.csv)
+            print("No usable hospitals in", a.file)
             return 1
         print(f"{len(sources)} hospitals, up to {a.pages_per_site} pages each. Finished sites are saved and skipped on re-run.")
 
@@ -127,8 +140,9 @@ def main(argv=None) -> int:
                 print(f"\n=== [{e['index']}/{e['total']}] {e['hospital']}  {' '.join(e['urls'])}", flush=True)
             elif e["event"] == "site_done":
                 print(f"--- {e['hospital']}: {e['status']}, {e['pages']} pages, {e['doctors']} doctors, "
-                      f"{e['oncologists']} oncologists, {e['with_email']} with email  {e['note']}", flush=True)
-            else:
+                      f"{e['oncologists']} oncologists ({e['with_phone']} with phone, {e['with_email']} with email)  "
+                      f"{e['note']}", flush=True)
+            elif e["event"] in ("page", "sitemap"):
                 _print_progress(e)
         path = run_batch(sources, a.out, _config(a), a.pages_per_site, resume=not a.no_resume, progress=show)
         print(f"\nSaved combined file: {path.resolve()}")

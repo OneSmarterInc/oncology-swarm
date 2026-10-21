@@ -188,3 +188,48 @@ def test_card_emails():
     by = {d.get("name"): d for d in pr.doctors}
     assert by["Dr. Ravi Nair"].get("email") == "ravi.nair@hosp.example"
     assert by["Dr. Tara Sen"].get("email") is None and by["Dr. Tara Sen"].get("contact_email") == "appointments@hosp.example"
+
+
+def test_phones_doctor_vs_desk_and_formats():
+    html = """<html><body><header>Emergency 011-2651-5050</header><main><h1>Dr. Kavya Iyer</h1>
+    <p>Consultant - Medical Oncology</p><p>MBBS, MD, DM</p>
+    <div class="label">Mobile</div><div class="value">98110 12345</div>
+    <p>For appointments call (080) 2502 4444 or toll free 1800-102-1010.</p>
+    <a href="https://wa.me/919845098450">WhatsApp Dr. Kavya</a>
+    <p>Reg. No. KMC-1234567890. Fax: 080-2502 4445</p></main></body></html>"""
+    d = extract_page(Page("https://hosp.example/doctors/dr-kavya-iyer", "https://hosp.example/doctors/dr-kavya-iyer", 200, html)).doctors[0]
+    assert d.get("phone") == "+91 98110 12345; +91 98450 98450"
+    assert d.get("contact_phone") == "+91 80 2502 4444; 1800-102-1010"
+    assert "2651" not in (d.get("phone") or "") + (d.get("contact_phone") or "")  # header ignored, fax ignored
+
+
+def test_card_and_table_phones():
+    cards = "".join(f'<div class="c"><h3>Dr. {n}</h3><p>Consultant - Surgical Oncology</p>{p}</div>'
+                    for n, p in [("Ravi Nair", '<a href="tel:+919900112233">Call</a>'),
+                                 ("Tara Sen", "<p>Appointments: 044-2474 1000</p>")])
+    pr = extract_page(Page("https://hosp.example/onco", "https://hosp.example/onco", 200,
+                           f"<html><body><main><h1>Surgical Oncology</h1>{cards}</main></body></html>"))
+    by = {d.get("name"): d for d in pr.doctors}
+    assert by["Dr. Ravi Nair"].get("phone") == "+91 99001 12233"
+    assert by["Dr. Tara Sen"].get("contact_phone") == "+91 44 2474 1000" and not by["Dr. Tara Sen"].get("phone")
+    table = ("<table><tr><th>Name</th><th>Designation</th><th>Mobile</th></tr>"
+             "<tr><td>Dr. Om Rao</td><td>Professor</td><td>94440 12345</td></tr>"
+             "<tr><td>Dr. Ila Das</td><td>Professor</td><td>94440 54321</td></tr></table>")
+    pr = extract_page(Page("https://inst.example/rt", "https://inst.example/rt", 200,
+                           f"<html><body><main><h2>Department of Radiation Oncology</h2>{table}</main></body></html>"))
+    assert {d.get("name"): d.get("phone") for d in pr.doctors} == {"Dr. Om Rao": "+91 94440 12345", "Dr. Ila Das": "+91 94440 54321"}
+
+
+def test_shared_number_moves_to_hospital_column():
+    from oncoscraper.contacts import demote_shared
+    from oncoscraper.models import DoctorRecord
+    recs = []
+    for i, n in enumerate(["A Rao", "B Sen", "C Das", "D Pai"]):
+        r = DoctorRecord(source_url=f"https://h.example/{i}")
+        r.values.update({"name": "Dr. " + n, "phone": "+91 98111 00000" + ("; +91 98222 0000%d" % i if i == 0 else ""),
+                         "email": "appointments-team@h.example"})
+        recs.append(r)
+    assert demote_shared(recs) == 8
+    assert recs[0].get("phone") == "+91 98222 00000"
+    assert recs[1].get("phone") is None and recs[1].get("contact_phone") == "+91 98111 00000"
+    assert recs[2].get("contact_email") == "appointments-team@h.example"

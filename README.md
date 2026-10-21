@@ -21,7 +21,7 @@ Or double-click `setup_windows.bat`. The last line downloads Chromium (about 150
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Expect `29 passed`.
+Expect `34 passed` (a few browser tests may show as skipped).
 
 Then try the fictional demo hospital. Window 1:
 
@@ -61,21 +61,53 @@ Open http://127.0.0.1:8000/, paste a URL, click **Start crawl**, watch progress,
 
 Use `.\.venv\Scripts\python.exe` in place of `python` on Windows. Press Ctrl+C to stop a crawl early; what was found is still saved.
 
-## Crawl many hospitals at once
+## Crawl many hospitals at once (Excel upload)
 
-`sources/india_hospitals.csv` lists official hospital and cancer-centre doctor pages. One command crawls them all, one by one, each with its own page budget:
+There is no allow-list to edit by hand. You give a hospital list in the standard template, and the crawler stays on the websites in that file.
+
+Get the blank template: web UI button **Download blank template**, or
 
 ```powershell
-.\.venv\Scripts\python.exe -m oncoscraper batch sources\india_hospitals.csv --out india_oncologists.xlsx
+.\.venv\Scripts\python.exe -m oncoscraper template --out my_hospitals.xlsx
+```
+
+One row per hospital. Only the hospital name and one URL are required.
+
+| Column | Required | What to put |
+|---|---|---|
+| Hospital Name | yes | e.g. `Max Super Speciality Hospital, Saket` |
+| Official Website | one URL needed | home page, e.g. `https://www.maxhealthcare.in` |
+| Oncology Page URLs | best | cancer department page(s); several separated by spaces or new lines |
+| Doctors List URLs | best | find-a-doctor / our doctors page(s) |
+| Sample Profile URL | helps | one doctor's profile page; the profile URL pattern is learned from it |
+| Profile URL Pattern | optional | e.g. `/doctor/`; leave empty to learn it from the sample |
+| City, State, Hospital Type | optional | for your own filtering |
+| Max Pages | optional | page budget for this hospital (default from the run) |
+| Include Subdomains | optional | `yes` if doctors are on a sub-site |
+| Use Browser | optional | `auto`, `always` or `never` |
+| Enabled | optional | `no` skips the row |
+| Notes | optional | free text |
+
+Old CSV lists with headers like `hospital, official_domain, oncology_url, doctors_list_url` are also accepted.
+`sources/india_hospitals.xlsx` is a ready list of 78 Indian hospitals and cancer centres in this template.
+
+Web UI: section **Crawl a hospital list (Excel)** → choose file → **Check file** (shows which rows are ready and which need fixing) → **Start batch** → **Download combined Excel**.
+
+Command line:
+
+```powershell
+.\.venv\Scripts\python.exe -m oncoscraper batch sources\india_hospitals.xlsx --out india_oncologists.xlsx
 ```
 
 | Option | Meaning |
 |---|---|
-| `--pages-per-site 150` | page budget per hospital (default 150) |
+| `--pages-per-site 150` | page budget per hospital when the row has no Max Pages (default 150) |
 | `--only Apollo` | run only hospitals whose name contains "Apollo" |
 | `--no-resume` | re-crawl hospitals that already finished |
 
-Each finished hospital is saved in `india_oncologists_sites\`. If the run stops (Ctrl+C, power cut), run the same command again and it continues from the next hospital. The Excel file gets a **Hospitals** sheet with pages, doctors, oncologists and emails found per hospital. Add your own rows to the CSV; only one URL column is needed.
+Each finished hospital is saved in `india_oncologists_sites\`. If the run stops (Ctrl+C, power cut), run the same command again and it continues from the next hospital. The Excel file gets a **Hospitals** sheet with pages, doctors, oncologists, and how many have a doctor phone, doctor email or any contact.
+
+PDF doctor lists are not read yet; put an HTML page URL instead.
 
 ## Which URL to give it
 
@@ -112,18 +144,27 @@ Oncology is decided from specialty, department, designation and sub-specialty (M
 | Evidence | each field, which layer found it, the page text, the URL |
 | Pages | every URL visited, HTTP status, page type |
 
-Columns: name, designation, specialty, sub-specialties, department, qualifications, experience, hospital, city, languages, expertise, OPD timings, consultation fee, registration, phone, email, contact email, education, awards, about, photo URL, source hospital, profile URL, found-on pages, oncology score.
+Columns: name, designation, specialty, sub-specialties, department, hospital, city, Doctor Phone, Doctor Email, Hospital / Desk Phone, Hospital / Desk Email, qualifications, experience, languages, expertise, OPD timings, consultation fee, registration, education, awards, about, photo URL, source hospital, profile URL, found-on pages, oncology score.
 
-**Emails.** The scraper collects every email the page publishes in its body: plain text, `mailto:` links, Cloudflare-protected addresses (shown as "[email protected]" in the browser), and written-out forms like `name [at] hospital [dot] com`. It never guesses addresses from name patterns. Each address goes in one of two columns:
+**Contacts.** Phones and emails are taken only from what the page publishes. Nothing is guessed or generated from name patterns. Header and footer contacts (the hospital switchboard) are ignored.
 
-| Column | Gets | Example |
+| Read from | Phones | Emails |
 |---|---|---|
-| Email | the doctor's own address: contains their name, or is the only non-desk address on their page or card | `meenu.walia@hospital.in` |
-| Contact Email | desk and department addresses shown on the doctor's page | `appointments@`, `oncology@`, `info@` |
+| Links | `tel:`, WhatsApp (`wa.me`, `api.whatsapp.com`) | `mailto:` |
+| Text | +91 mobiles, landlines with STD code, 1800 toll-free | plain, `name [at] hospital [dot] com` |
+| Hidden forms | | Cloudflare-protected ("[email protected]") |
+| Structured data | JSON-LD / app data `telephone` | JSON-LD `email` |
 
-Many hospital profile pages publish no email at all; then both columns stay empty.
+Phones are written in one format: `+91 98xxx xxxxx`, `+91 80 xxxx xxxx`, `1800-xxx-xxxx`. Registration numbers, fax numbers and PIN codes are not taken as phones.
 
-Phone numbers are taken only from explicit labels or `tel:` links in the page body. Header and footer contacts (the hospital switchboard) are ignored. Registration numbers are what the hospital page claims; they are not checked against the NMC register.
+Each value goes in one of two column pairs:
+
+| Column | Gets |
+|---|---|
+| Doctor Phone / Doctor Email | labelled as the doctor's (`Mobile`, `Direct`, `Dr. X: ...`); an email with the doctor's name; an unlabelled mobile or the only non-desk email on the doctor's own page or card |
+| Hospital / Desk Phone / Email | labelled `Appointments`, `Helpline`, `Reception`, `OPD`, `Call us`; unlabelled landlines and toll-free numbers; `info@`, `appointments@`, `oncology@` |
+
+A phone or email that appears on 3 or more doctors is moved to the Hospital / Desk columns, because it is a shared desk number, not a personal one. Many hospital profile pages publish no contact at all; then the columns stay empty. Registration numbers are what the hospital page claims; they are not checked against the NMC register.
 
 ## Rules it follows
 
@@ -158,8 +199,12 @@ oncoscraper/
   vocab.py      degrees, designations, cities, languages, labels, URL hints
   templates.py  optional per-site selectors
   emails.py     published, Cloudflare-protected and obfuscated emails; doctor vs desk
-  batch.py      many hospitals from a CSV, per-site budget and resume
+  phones.py     phone finding, +91 normalising, doctor vs desk
+  contacts.py   moves shared phones/emails to the desk columns
+  sources.py    hospital-list template: read, check, write
+  batch.py      many hospitals from an Excel/CSV list, per-site budget and resume
   export.py     Excel / CSV / JSON
   web.py        local web UI (static/index.html)
-tests/          fictional hospital site, firewall simulator, 29 tests
+tests/          fictional hospital site, firewall simulator, 34 tests
+sources/        india_hospitals.xlsx (78 hospitals), hospital_list_template.xlsx
 ```

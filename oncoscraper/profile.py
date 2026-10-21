@@ -6,9 +6,9 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
-from . import emails
+from . import emails, phones
 from .annotate import Line, annotate
-from .models import LIST_FIELDS, DoctorRecord
+from .models import LIST_FIELDS, DoctorRecord, Evidence
 from .vocab import (
     CITY_CANON, CITY_RE, DESIGNATION_RE, EMAIL_RE, EXPERIENCE_RE, FEE_RE, FEE_RE2, HOSPITAL_WORDS, LANG_RE,
     NAME_RE, NAME_STOP, OPD_RE, PHONE_RE, QUAL_RE, QUAL_STRONG, REG_RE, SUB_SPECIALTIES, clean_name,
@@ -109,20 +109,40 @@ def name_from_url(url: str) -> str | None:
 
 
 # --------------------------------------------------------------------------
+def add_contacts(rec: DoctorRecord, field: str, items: list[str], layer: str, snippet: str, url: str) -> None:
+    """Union contact values ('a; b') instead of replacing them, keeping first-seen order."""
+    items = [i for i in items if i]
+    if not items:
+        return
+    existing = [x for x in (rec.get(field) or "").split("; ") if x]
+    merged = list(dict.fromkeys(existing + items))
+    if merged == existing:
+        return
+    rec.values[field] = "; ".join(merged)
+    rec.layers.setdefault(field, layer)
+    for item in items:
+        if item not in existing:
+            rec.evidence.append(Evidence(field, item, layer, (snippet or item)[:500], url))
+
+
 def assign_emails(rec: DoctorRecord, addrs: list[str], layer: str, snippet: str, url: str,
                   single_doctor: bool = True) -> None:
     """Doctor's own address -> email; desk/department addresses -> contact_email."""
     if not addrs:
         return
     own, other = emails.classify(addrs, rec.get("name"), single_doctor)
-    if own:
-        rec.set("email", "; ".join(own), layer, snippet, url)
-    if other:
-        existing = rec.get("contact_email")
-        merged = list(dict.fromkeys(([existing] if existing else []) + other))
-        rec.values.pop("contact_email", None)
-        rec.layers.pop("contact_email", None)
-        rec.set("contact_email", "; ".join(merged), layer, snippet, url)
+    add_contacts(rec, "email", own, layer, snippet, url)
+    add_contacts(rec, "contact_email", [o for o in other if o not in (rec.get("email") or "")], layer, snippet, url)
+
+
+def assign_phones(rec: DoctorRecord, found: list[tuple[str, str]], layer: str, snippet: str, url: str,
+                  single_doctor: bool = True) -> None:
+    """Doctor's own number -> phone; hospital/desk numbers -> contact_phone."""
+    if not found:
+        return
+    own, desk = phones.classify(found, single_doctor)
+    add_contacts(rec, "phone", own, layer, snippet, url)
+    add_contacts(rec, "contact_phone", [d for d in desk if d not in (rec.get("phone") or "")], layer, snippet, url)
 
 
 def find_name_in_text(text: str) -> str | None:
@@ -287,10 +307,12 @@ def _assign(rec: DoctorRecord, f: str, value: str, layer: str, snippet: str, url
             rec.set(f, m.group(0).replace(",", ""), layer, snippet, url)
     elif f in ("email", "contact_email"):
         assign_emails(rec, emails.find(value), layer, snippet, url)
-    elif f == "phone":
-        m = PHONE_RE.search(value)
-        if m and sum(c.isdigit() for c in m.group(0)) >= 8:
-            rec.set(f, m.group(0).strip(), layer, snippet, url)
+    elif f in ("phone", "contact_phone"):
+        found = [(n, (snippet or "") + " " + ctx) for n, ctx in phones.find(value)]
+        if f == "contact_phone":
+            add_contacts(rec, "contact_phone", [n for n, _ in found], layer, snippet, url)
+        else:
+            assign_phones(rec, found, layer, snippet, url)
     elif f == "registration":
         m = REG_RE.search(value) or re.search(r"[A-Z]{0,8}[-/ ]?\d{3,7}(?:[-/ ]\d{1,6})?", value)
         if m:
@@ -384,10 +406,12 @@ def patterns(rec: DoctorRecord, lines: list[Line], name_idx: int, main: Tag, url
     found = emails.from_links(main) + emails.find(full_text)
     if found:
         assign_emails(rec, list(dict.fromkeys(found)), "patterns", "; ".join(found)[:300], url)
-    if "phone" not in rec.values:
-        a = main.find("a", href=re.compile(r"^tel:", re.I))
-        if a:
-            rec.set("phone", a["href"][4:].strip(), "patterns", str(a)[:200], url)
+    # Phones: tel:/WhatsApp links and numbers written in the page body (header/footer already removed).
+    found_phones = phones.from_links(main) + phones.find(full_text)
+    if found_phones:
+        seen_nums: set[str] = set()
+        unique = [(n, c) for n, c in found_phones if not (n in seen_nums or seen_nums.add(n))]
+        assign_phones(rec, unique, "patterns", "; ".join(n for n, _ in unique)[:300], url)
 
     # Hospital: breadcrumbs or site name as last resort.
     if "hospital" not in rec.values:
