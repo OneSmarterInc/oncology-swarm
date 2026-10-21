@@ -8,6 +8,7 @@ finished sites.
 from __future__ import annotations
 
 import json
+from collections import Counter
 import re
 import threading
 import time
@@ -24,6 +25,25 @@ from .sources import Source
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60] or "site"
+
+
+def _reason(note: str) -> str:
+    """Short, readable reason for a failed page."""
+    n = note.lower()
+    if "robots.txt" in n:
+        return "blocked by robots.txt"
+    if "certificate" in n or "ssl" in n:
+        return "SSL certificate error"
+    if "proxy" in n:
+        return "proxy error"
+    if "timeout" in n or "timed out" in n:
+        return "timeout"
+    if "connecterror" in n or "getaddrinfo" in n or "name resolution" in n:
+        return "cannot connect"
+    m = re.search(r"http (\d{3})", n)
+    if m:
+        return f"HTTP {m.group(1)}" + (" even in browser" if "real browser" in n else "")
+    return note[:80] or "unknown"
 
 
 def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_site_pages: int,
@@ -64,9 +84,10 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
                 data = {"hospital": src.hospital, "urls": src.urls, "stats": {}, "doctors": [], "pages": [],
                         "error": f"{type(exc).__name__}: {exc}"}
             stopped = bool(data["stats"].get("stopped_early"))
-            if not stopped:  # a hospital cut short by Stop is crawled again next time
+            all_failed = bool(data["pages"]) and all(p["page_type"] == "error" for p in data["pages"])
+            if not stopped and not data["error"] and not all_failed:  # a hospital cut short by Stop is crawled again next time
                 jpath.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            status = "error" if data["error"] else ("stopped" if stopped else "done")
+            status = "error" if data["error"] else ("stopped" if stopped else ("failed" if all_failed else "done"))
         docs = [DoctorRecord.from_full_dict(d) for d in data["doctors"]]
         for d in docs:
             d.source_hospital = src.hospital
@@ -77,7 +98,9 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
         robots = sum(1 for p in failed if "robots.txt" in (p.get("note") or ""))
         note = data.get("error") or ""
         if not note and failed:
-            note = f"{len(failed)} pages failed" + (f" ({robots} blocked by robots.txt)" if robots else "")
+            reasons = Counter(_reason(p.get("note") or "") for p in failed)
+            top = "; ".join(f"{r} x{n}" if n > 1 else r for r, n in reasons.most_common(2))
+            note = f"{len(failed)} of {len(data['pages'])} pages failed: {top}"
         if src.warnings:
             note = (note + "; " if note else "") + "; ".join(src.warnings)
         summary.append({

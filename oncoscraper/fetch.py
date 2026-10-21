@@ -20,6 +20,22 @@ from .robots import AllowAll, RobotsPolicy
 
 log = logging.getLogger(__name__)
 
+
+def _ssl_verify():
+    """Use the operating system's certificate store when possible.
+
+    Windows then also fetches missing intermediate certificates (many hospital
+    sites send an incomplete chain) and trusts antivirus / office proxy roots,
+    the same way Chrome does. Falls back to httpx's default bundle.
+    """
+    try:
+        import ssl
+
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # truststore missing or unsupported
+        return True
+
 HTML_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
 
 
@@ -43,6 +59,11 @@ def normalize_url(url: str) -> str:
     # Drop common tracking params, keep the rest (pagination lives in queries).
     query = "&".join(q for q in p.query.split("&") if q and not re.match(r"(utm_|fbclid|gclid|ref=|source=)", q))
     return urlunsplit((scheme, host + port, path, query, ""))
+
+
+def _is_ssl_or_proxy(exc: Exception) -> bool:
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(k in text for k in ("certificate", "ssl", "proxy", "tls", "handshake"))
 
 
 @functools.lru_cache(maxsize=512)
@@ -75,6 +96,7 @@ class Fetcher:
                 "Sec-Fetch-User": "?1",
             },
             max_redirects=5,
+            verify=_ssl_verify(),
         )
         self._robots: dict[str, RobotsPolicy] = {}
         self.robots_status: dict[str, str] = {}
@@ -127,8 +149,21 @@ class Fetcher:
             else:
                 self.robots_status[origin] = f"{resp.status_code} (no usable robots.txt, no rules)"
         except httpx.HTTPError as exc:
-            log.warning("robots.txt unavailable for %s: %s", origin, exc)
-            self.robots_status[origin] = f"unreachable ({type(exc).__name__}), no rules"
+            log.warning("robots.txt unavailable to plain HTTP for %s: %s", origin, exc)
+            self.robots_status[origin] = f"unreachable to plain HTTP ({type(exc).__name__}), no rules"
+            if self._browser_ok():
+                # Plain HTTP cannot connect (certificate, proxy or firewall); read it the way Chrome does.
+                b = self._browser_get(origin + "/robots.txt", expand=False)
+                if b is not None:
+                    self.browser_hosts.add(urlsplit(origin).netloc)
+                    if b.status == 200 and "<html" not in b.text[:500].lower():
+                        policy = RobotsPolicy(b.text, self.cfg.user_agent)
+                        self.robots_status[origin] = "plain HTTP failed, 200 in browser (rules applied)"
+                    elif b.status >= 500:
+                        policy = RobotsPolicy("User-agent: *\nDisallow: /", self.cfg.user_agent)
+                        self.robots_status[origin] = f"{b.status} in browser (server error, site treated as closed)"
+                    else:
+                        self.robots_status[origin] = f"plain HTTP failed, browser got {b.status} (no rules)"
         self._robots[origin] = policy
         return policy
 
@@ -180,7 +215,9 @@ class Fetcher:
             try:
                 resp = self._raw_get(url)
             except httpx.HTTPError as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
+                last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+                if _is_ssl_or_proxy(exc):
+                    break  # retrying the same client will not help
                 time.sleep(min(10, 2 ** attempt))
                 continue
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < self.cfg.retries:
@@ -189,7 +226,7 @@ class Fetcher:
                 continue
             final = normalize_url(str(resp.url))
             ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-            if resp.status_code in BLOCK_CODES:
+            if resp.status_code in BLOCK_CODES or (400 <= resp.status_code < 500 and resp.status_code not in (404, 410)):
                 # Firewall refuses non-browser clients (common on large hospital sites).
                 return self._via_browser(url, final, resp.status_code, ctype)
             if resp.status_code >= 400:
@@ -207,6 +244,12 @@ class Fetcher:
                 page = self._render(page) or page
             self._save(page)
             return page
+        # Plain HTTP could not connect at all (certificate, proxy, firewall). Chrome often can.
+        if self._browser_ok():
+            page = self._via_browser(url, url, 0, "", reason=last_error)
+            if not page.error:
+                return page
+            return Page(url, url, 0, "", error=f"plain HTTP: {last_error}; browser: {page.error}")
         return Page(url, url, 0, "", error=last_error or "failed")
 
     # -- optional JavaScript rendering --------------------------------------
@@ -244,7 +287,7 @@ class Fetcher:
             log.warning("browser fetch failed for %s: %s", url, exc)
             return None
 
-    def _via_browser(self, url: str, final: str, http_status: int, ctype: str) -> Page:
+    def _via_browser(self, url: str, final: str, http_status: int, ctype: str, reason: str | None = None) -> Page:
         if not self._browser_ok():
             hint = (f"site blocks non-browser clients; install Playwright to fetch it: "
                     f"pip install -r requirements.txt && python -m playwright install chromium"
@@ -256,7 +299,7 @@ class Fetcher:
         if b.status >= 400 or CHALLENGE_RE.search(b.html[:20000]):
             return Page(url, normalize_url(b.url), b.status, "", b.content_type,
                         error=f"HTTP {b.status} even in a real browser (site blocks automated access)")
-        if http_status:
+        if http_status or reason:
             self.browser_hosts.add(urlsplit(url).netloc)
         page = Page(url, normalize_url(b.url), b.status or 200, b.html, b.content_type or "text/html", rendered=True)
         self._save(page)

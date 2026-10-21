@@ -100,3 +100,22 @@ def test_firewall_403_falls_back_to_real_browser(waf_url):
     # robots.txt was read through the browser and still obeyed
     assert "rules applied" in next(iter(crawler.fetcher.robots_status.values()))
     assert not any("/private" in p.url and p.page_type != "error" for p in result.pages)
+
+
+def test_plain_http_cannot_connect_falls_back_to_browser(site_url, monkeypatch):
+    """Certificate, proxy or antivirus problems break plain HTTP on some PCs; Chrome still connects."""
+    import httpx
+    from oncoscraper.fetch import Fetcher
+
+    def broken(self, url):
+        raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate")
+
+    monkeypatch.setattr(Fetcher, "_raw_get", broken)
+    failed = Crawler(cfg(max_pages=1, use_sitemaps=False, render="never")).run([site_url + "/doctor/dr-anil-gupta"])
+    assert failed.doctors == [] and "CERTIFICATE" in failed.pages[0].note
+    need_browser()
+    crawler = Crawler(cfg(max_pages=3, use_sitemaps=False, render="auto"))
+    result = crawler.run([site_url + "/doctor/dr-anil-gupta"])
+    assert result.pages[0].page_type != "error"
+    assert result.doctors
+    assert crawler.fetcher.browser_hosts

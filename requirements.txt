@@ -8,3 +8,5 @@ brotli>=1.1
 # Real browser for sites whose firewall blocks plain HTTP (e.g. maxhealthcare.in)
 # and for JavaScript-only pages. After installing run:  python -m playwright install chromium
 playwright>=1.44
+# Use the Windows certificate store (fixes certificate errors on many hospital sites)
+truststore>=0.9
