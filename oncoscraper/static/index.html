@@ -46,6 +46,20 @@ a { color:var(--accent); }
   textarea, input, select { background:#11181b; color:var(--ink); border-color:#33454b; }
   button.secondary { background:transparent; } .pill { background:#1f3337; color:#9fd6d6; }
 }
+.grid { align-items:end; }
+main { grid-template-columns:minmax(0,1fr); } .card { min-width:0; }
+.tablewrap table { min-width:720px; }
+.msg { margin:8px 0 0; font-size:13px; min-height:0; } .msg:empty { display:none; }
+.msg.bad { color:var(--bad); font-weight:600; } .msg.ok { color:var(--ok); } .msg.info { color:var(--muted); }
+.source-label { font-weight:400; color:var(--muted); font-size:13px; margin-left:6px; }
+td.empty { text-align:center; color:var(--muted); padding:18px; }
+.summary dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:8px 0; font-size:14px; }
+.summary dt { color:var(--muted); } .summary dd { margin:0; }
+details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-top:8px; }
+@media (prefers-color-scheme: dark) {
+  button.secondary { color:#7fd8d2; border-color:#3d9c97; } :root { --ok:#5cc985; --bad:#ff8a80; }
+  a, details summary { color:#7fd8d2; }
+}
 </style>
 </head>
 <body>
@@ -55,10 +69,11 @@ a { color:var(--accent); }
   <h2>Crawl a hospital list (Excel)</h2>
   <p class="hint" style="margin-top:0">One row per hospital in the standard template. The crawler stays on the websites in your file; there is no separate allow-list to edit.</p>
   <div class="row" style="margin-top:6px">
-    <a href="/api/template.xlsx"><button class="secondary" type="button">Download blank template</button></a>
+    <button class="secondary" type="button" id="b-template">Download blank template</button>
     <input type="file" id="b-file" accept=".xlsx,.csv" style="flex:1;min-width:240px">
     <button id="b-check" class="secondary" type="button">Check file</button>
   </div>
+  <p class="msg" id="b-msg" role="status"></p>
   <div id="b-check-out" hidden style="margin-top:12px"></div>
   <div class="grid">
     <div><label for="b-pages">Pages per hospital</label><input id="b-pages" type="number" value="150" min="1" max="5000"></div>
@@ -81,7 +96,8 @@ a { color:var(--accent); }
     <div class="tablewrap sites" id="b-wrap" style="margin-top:10px"><table>
       <thead><tr><th>Row</th><th>Hospital</th><th>Status</th><th>Pages</th><th>Oncologists</th><th>With doctor phone</th><th>With doctor email</th><th>With any contact</th><th>Note</th></tr></thead>
       <tbody id="b-sites"></tbody></table></div>
-    <div class="row" id="b-dl" hidden><a id="b-dl-xlsx"><button type="button" id="b-dl-btn">Download combined Excel</button></a><span class="hint" id="b-totals"></span></div>
+    <div class="row" id="b-dl" hidden><button type="button" id="b-dl-btn">Download combined Excel</button>
+      <button type="button" class="secondary" id="b-show">Show doctors below</button><span class="hint" id="b-totals"></span></div>
   </div>
 </section>
 
@@ -100,6 +116,7 @@ a { color:var(--accent); }
   </div>
   <div class="row"><button id="start">Start crawl</button><button id="pause" class="secondary" disabled>Pause</button><button id="stop" class="secondary" disabled>Stop</button>
   <span class="hint">robots.txt is always respected. Only the same website is crawled.</span></div>
+  <p class="msg" id="msg" role="status"></p>
 </section>
 
 <section class="card" id="progress-card" hidden>
@@ -114,16 +131,16 @@ a { color:var(--accent); }
   <div class="bar"><i id="bar"></i></div>
   <div class="log" id="log"></div>
   <div class="row" id="downloads" hidden>
-    <a id="dl-xlsx"><button>Download Excel</button></a>
-    <a id="dl-csv"><button class="secondary">CSV</button></a>
-    <a id="dl-json"><button class="secondary">JSON</button></a>
+    <button type="button" id="dl-xlsx">Download Excel</button>
+    <button type="button" class="secondary" id="dl-csv">CSV</button>
+    <button type="button" class="secondary" id="dl-json">JSON</button>
     <span class="hint">While the crawl runs, these give what has been found so far.</span>
   </div>
   <p class="hint" id="error"></p>
 </section>
 
 <section class="card" id="results-card" hidden>
-  <h2>Results <span class="pill" id="count"></span></h2>
+  <h2>Results <span class="pill" id="count"></span><span class="source-label" id="results-from"></span></h2>
   <input id="filter" placeholder="Filter by name, hospital, city or specialty">
   <div class="tablewrap" style="margin-top:10px"><table>
     <thead><tr><th>Name</th><th>Designation</th><th>Specialty</th><th>Doctor phone</th><th>Doctor email</th><th>Hospital / desk contact</th><th>Hospital</th><th>City</th><th>Qualifications</th><th>Exp.</th><th>Source</th></tr></thead>
@@ -134,142 +151,10 @@ a { color:var(--accent); }
   <h2>Test one page</h2>
   <p class="hint">Check what the extractor reads from a single URL before running a full crawl.</p>
   <div class="row" style="margin-top:6px"><input id="page-url" placeholder="https://www.hospital-website.in/doctor/dr-name" style="flex:1"><button id="page-btn" class="secondary">Test page</button></div>
-  <pre class="json" id="page-out" hidden></pre>
+  <div class="summary" id="page-sum" hidden></div>
+  <details id="page-raw" hidden><summary>Show raw data</summary><pre class="json" id="page-out"></pre></details>
 </section>
 </main>
-<script>
-const $ = id => document.getElementById(id);
-let jobId = null, timer = null, rows = [];
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function list(v) { return Array.isArray(v) ? v.join(', ') : (v ?? ''); }
-function safeUrl(u) { return /^https?:\/\//i.test(u || '') ? u : '#'; }
-
-$('start').onclick = async () => {
-  const urls = $('urls').value.split(/\s+/).filter(Boolean);
-  if (!urls.length) { alert('Enter at least one URL'); return; }
-  const body = { urls, max_pages:+$('max_pages').value, max_depth:+$('depth').value, delay_seconds:+$('delay').value,
-    render:$('render').value, all_specialties:$('all').checked, use_sitemaps:$('sitemap').checked, include_subdomains:$('subdomains').checked };
-  const r = await fetch('/api/jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (!r.ok) { $('error').textContent = await r.text(); return; }
-  jobId = (await r.json()).id;
-  $('progress-card').hidden = false; $('results-card').hidden = false; $('error').textContent = '';
-  // Downloads work at any time: while running they give what has been found so far.
-  $('downloads').hidden = false;
-  $('dl-xlsx').href = `/api/jobs/${jobId}/download.xlsx`; $('dl-csv').href = `/api/jobs/${jobId}/download.csv`; $('dl-json').href = `/api/jobs/${jobId}/download.json`;
-  $('log').textContent = ''; $('start').disabled = true; $('stop').disabled = false;
-  $('pause').disabled = false; $('pause').textContent = 'Pause';
-  clearInterval(timer); timer = setInterval(poll, 1500); poll();
-};
-$('stop').onclick = async () => { if (jobId) await fetch(`/api/jobs/${jobId}/stop`, {method:'POST'}); $('stop').disabled = true; $('pause').disabled = true; };
-// Pause keeps everything found so far and waits; Resume carries on from the same place.
-async function togglePause(btn, base) {
-  const action = btn.textContent === 'Pause' ? 'pause' : 'resume';
-  const r = await fetch(`${base}/${action}`, {method:'POST'});
-  if (r.ok) btn.textContent = action === 'pause' ? 'Resume' : 'Pause';
-}
-$('pause').onclick = () => jobId && togglePause($('pause'), `/api/jobs/${jobId}`);
-
-async function poll() {
-  const r = await fetch(`/api/jobs/${jobId}`); if (!r.ok) return;
-  const j = await r.json();
-  $('state').textContent = j.state; $('state').className = 'state ' + j.state;
-  $('s-fetched').textContent = j.progress.fetched; $('s-queued').textContent = j.progress.queued;
-  $('s-doctors').textContent = j.progress.doctors_total; $('s-onco').textContent = j.progress.oncologists;
-  $('s-time').textContent = j.elapsed + 's';
-  $('bar').style.width = Math.min(100, 100 * j.progress.fetched / j.max_pages) + '%';
-  $('log').innerHTML = j.log.map(l => {
-    const cls = l.error ? 'x' : (l.type === 'profile' ? 'p' : (l.type === 'listing' ? 'l' : ''));
-    return `<span class="${cls}">${esc((l.type||'').padEnd(8))} ${esc(l.status)} ${esc(l.url)}${l.doctors ? '  +' + l.doctors : ''}${l.error ? '  (' + esc(l.error) + ')' : ''}</span>`;
-  }).join('\n');
-  $('log').scrollTop = $('log').scrollHeight;
-  rows = j.doctors; render();
-  $('pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
-  if (j.state !== 'running' && j.state !== 'paused') {
-    clearInterval(timer); $('start').disabled = false; $('stop').disabled = true; $('pause').disabled = true;
-    if (j.error) $('error').textContent = j.error;
-    if (j.stats) {
-      $('downloads').hidden = false;
-      $('dl-xlsx').href = `/api/jobs/${jobId}/download.xlsx`; $('dl-csv').href = `/api/jobs/${jobId}/download.csv`; $('dl-json').href = `/api/jobs/${jobId}/download.json`;
-    }
-  }
-}
-function render() {
-  const q = $('filter').value.toLowerCase();
-  const shown = rows.filter(d => !q || JSON.stringify(d).toLowerCase().includes(q));
-  $('count').textContent = shown.length + ' doctors';
-  $('rows').innerHTML = shown.map(d => `<tr><td><b>${esc(d.name)}</b>${d.page_type==='profile' ? '' : ' <span class="pill">card</span>'}</td>
-    <td>${esc(d.designation)}</td><td>${esc(d.specialty || list(d.sub_specialties))}</td>
-    <td class="contact">${esc(d.phone)}</td><td class="contact">${esc(d.email)}</td>
-    <td class="muted">${esc([d.contact_phone, d.contact_email].filter(Boolean).join('; '))}</td>
-    <td>${esc(d.hospital)}</td><td>${esc(d.city)}</td><td>${esc(list(d.qualifications))}</td><td>${esc(d.experience_years)}</td>
-    <td><a href="${esc(safeUrl(d.profile_url || d.source_url))}" target="_blank" rel="noopener">open</a></td></tr>`).join('');
-}
-$('filter').oninput = render;
-
-$('page-btn').onclick = async () => {
-  const url = $('page-url').value.trim(); if (!url) return;
-  $('page-out').hidden = false; $('page-out').textContent = 'Fetching…';
-  const r = await fetch('/api/page', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, render:$('render').value})});
-  $('page-out').textContent = JSON.stringify(await r.json(), null, 2);
-};
-
-// ---- batch upload ----------------------------------------------------------
-let batchId = null, batchTimer = null;
-async function fileBody() {
-  const f = $('b-file').files[0];
-  if (!f) { alert('Choose an .xlsx or .csv file first'); return null; }
-  const buf = new Uint8Array(await f.arrayBuffer());
-  let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-  return { filename: f.name, content_base64: btoa(bin) };
-}
-$('b-check').onclick = async () => {
-  const body = await fileBody(); if (!body) return;
-  const r = await fetch('/api/sources/check', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const j = await r.json(); const out = $('b-check-out'); out.hidden = false;
-  if (!r.ok) { out.innerHTML = `<p class="bad">${esc(j.detail || 'Could not read file')}</p>`; return; }
-  const rows = j.sources.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td>${s.urls.length}</td><td>${esc(s.patterns.join(' '))}</td><td class="warn">${esc(s.warnings.join('; '))}</td></tr>`).join('');
-  const probs = j.problems.map(p => `<tr><td>${p.row}</td><td>${esc(p.hospital)}</td><td colspan="3" class="bad">${esc(p.problem)}</td></tr>`).join('');
-  out.innerHTML = `<p><b class="ok">${j.usable} hospitals ready</b>${j.problems.length ? `, <b class="bad">${j.problems.length} rows need attention</b>` : ''}</p>
-    <div class="tablewrap"><table><thead><tr><th>Row</th><th>Hospital</th><th>Start URLs</th><th>Profile pattern</th><th>Warnings / problems</th></tr></thead><tbody>${probs}${rows}</tbody></table></div>`;
-};
-$('b-start').onclick = async () => {
-  const body = await fileBody(); if (!body) return;
-  Object.assign(body, { pages_per_site:+$('b-pages').value, delay_seconds:+$('b-delay').value, render:$('b-render').value,
-    all_specialties:$('b-all').checked, use_sitemaps:$('b-sitemap').checked });
-  const r = await fetch('/api/batch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const j = await r.json();
-  if (!r.ok) { $('b-status').textContent = j.detail || 'Could not start'; return; }
-  batchId = j.id; $('b-progress').hidden = false; $('b-sites').innerHTML = '';
-  $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
-  $('b-dl-btn').textContent = 'Download results so far'; $('b-totals').textContent = 'Partial file: finished hospitals plus the one being crawled now.';
-  $('b-status').textContent = `${j.hospitals} hospitals queued` + (j.problems.length ? `, ${j.problems.length} rows skipped` : '');
-  $('b-start').disabled = true; $('b-stop').disabled = false; $('b-pause').disabled = false; $('b-pause').textContent = 'Pause';
-  clearInterval(batchTimer); batchTimer = setInterval(pollBatch, 2000); pollBatch();
-};
-$('b-stop').onclick = async () => { if (batchId) await fetch(`/api/batch/${batchId}/stop`, {method:'POST'}); $('b-stop').disabled = true; $('b-pause').disabled = true; };
-$('b-pause').onclick = () => batchId && togglePause($('b-pause'), `/api/batch/${batchId}`);
-async function pollBatch() {
-  const r = await fetch(`/api/batch/${batchId}`); if (!r.ok) return; const j = await r.json();
-  $('b-idx').textContent = `${j.index}/${j.total}`; $('b-time').textContent = j.elapsed + 's';
-  $('b-pagesnow').textContent = j.progress.fetched || 0; $('b-onconow').textContent = j.progress.oncologists || 0;
-  $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
-  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}`
-    : j.state === 'paused' ? `Paused at: ${j.current} (press Resume to carry on)` : `Batch ${j.state}`;
-  $('b-pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
-  const wrap = $('b-wrap'), keep = wrap.scrollTop;  // keep the user's scroll position on refresh
-  $('b-sites').innerHTML = j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${(s.status==='error'||s.status==='failed')?'bad':'ok'}">${esc(s.status)}</td>
-    <td>${s.pages}</td><td>${s.oncologists}</td><td>${s.with_phone}</td><td>${s.with_email}</td><td>${s.with_any_contact}</td><td class="muted">${esc(s.note)}</td></tr>`).join('');
-  wrap.scrollTop = keep;
-  if (j.state !== 'running' && j.state !== 'paused') {
-    clearInterval(batchTimer); $('b-start').disabled = false; $('b-stop').disabled = true; $('b-pause').disabled = true;
-    if (j.error) $('b-status').textContent = j.error;
-    if (j.stats) {
-      $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
-      $('b-dl-btn').textContent = 'Download combined Excel';
-      $('b-totals').textContent = `${j.stats.oncologists} oncologists: ${j.stats.oncologists_with_doctor_phone} with doctor phone, ${j.stats.oncologists_with_doctor_email} with doctor email, ${j.stats.oncologists_with_any_contact} with any contact.`;
-    }
-  }
-}
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>

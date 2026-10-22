@@ -112,6 +112,20 @@ class Job:
 JOBS: dict[str, Job] = {}
 
 
+ROW_KEYS = ("name", "designation", "specialty", "sub_specialties", "qualifications", "experience_years", "hospital",
+            "city", "phone", "email", "contact_phone", "contact_email", "profile_url", "source_url", "is_oncology",
+            "page_type")
+
+
+def _rows(docs, limit: int = 3000) -> list[dict]:
+    out = []
+    for d in docs[:limit]:
+        x = d.to_dict()
+        out.append({k: x.get(k) for k in ROW_KEYS} | {"fields": len(d.filled_fields()),
+                                                      "source_hospital": d.source_hospital})
+    return out
+
+
 def _state(job) -> str:
     return "paused" if job.state == "running" and job.pause.is_set() else job.state
 
@@ -121,6 +135,12 @@ def _pause(job, paused: bool) -> dict:
         raise HTTPException(409, f"cannot pause or resume: the run is {job.state}")
     (job.pause.set if paused else job.pause.clear)()
     return {"ok": True, "state": _state(job)}
+
+
+@app.get("/static/app.js")
+def app_js():
+    return Response((STATIC / "app.js").read_text(encoding="utf-8"), media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -143,14 +163,7 @@ def status(job_id: str, since: int = 0):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
-    docs = job.doctors()
-    rows = []
-    for d in docs[:2000]:
-        x = d.to_dict()
-        rows.append({k: x.get(k) for k in ("name", "designation", "specialty", "sub_specialties", "qualifications",
-                                            "experience_years", "hospital", "city", "phone", "email", "contact_phone",
-                                            "contact_email", "profile_url", "source_url", "is_oncology", "page_type")}
-                    | {"fields": len(d.filled_fields())})
+    rows = _rows(job.doctors())
     return {"id": job.id, "state": _state(job), "error": job.error, "progress": job.progress,
             "max_pages": job.body.max_pages, "elapsed": round(time.time() - job.started),
             "stats": job.result.stats if job.result else None, "log": list(job.log)[-60:], "doctors": rows}
@@ -247,7 +260,7 @@ def _load_upload(body: UploadIn):
     import base64
     import tempfile
 
-    from .sources import read_sources
+    from .sources import HeaderError, read_sources
     suffix = Path(body.filename).suffix.lower()
     if suffix not in (".xlsx", ".xlsm", ".csv"):
         raise HTTPException(400, "Upload an .xlsx or .csv file made from the template")
@@ -260,8 +273,10 @@ def _load_upload(body: UploadIn):
         tmp = Path(fh.name)
     try:
         return read_sources(tmp)
+    except HeaderError as exc:
+        raise HTTPException(400, str(exc)) from None
     except Exception as exc:
-        raise HTTPException(400, f"Could not read the file: {exc}") from None
+        raise HTTPException(400, f"Could not read the file. Save it as .xlsx or .csv from the template and try again ({exc})") from None
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -351,6 +366,33 @@ def batch_start(body: BatchIn):
     BATCHES[job.id] = job
     threading.Thread(target=job.run, daemon=True).start()
     return {"id": job.id, "hospitals": len(sources), "problems": [p.__dict__ for p in problems]}
+
+
+@app.get("/api/active")
+def active():
+    """The latest single crawl and batch, so a reloaded page can pick them up again."""
+    def last(d):
+        if not d:
+            return None
+        job = list(d.values())[-1]
+        return {"id": job.id, "state": _state(job)}
+    return {"job": last(JOBS), "batch": last(BATCHES)}
+
+
+@app.get("/api/batch/{job_id}/doctors")
+def batch_doctors(job_id: str):
+    """Doctors found so far in a batch (finished hospitals plus the one being crawled)."""
+    job = BATCHES.get(job_id) or _missing("batch")
+    live = job.live
+    docs = list(live["merger"].records) if live.get("merger") else []
+    crawler, src = live.get("crawler"), live.get("src")
+    if crawler is not None and src is not None:
+        for d in list(crawler.merger.records):
+            d.source_hospital = d.source_hospital or src.hospital
+            docs.append(d)
+    if not job.body.all_specialties:
+        docs = [d for d in docs if d.is_oncology]
+    return {"doctors": _rows(docs)}
 
 
 @app.get("/api/batch/{job_id}")

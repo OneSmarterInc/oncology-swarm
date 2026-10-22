@@ -122,7 +122,11 @@ def main(argv=None) -> int:
     if a.cmd == "batch":
         from .batch import run_batch
         from .sources import read_sources
-        sources, problems = read_sources(a.file)
+        try:
+            sources, problems = read_sources(a.file)
+        except (ValueError, OSError) as exc:  # wrong columns, wrong file type, file not found
+            print(f"Cannot read {a.file}: {exc}")
+            return 2
         if a.only:
             sources = [s for s in sources if a.only.lower() in s.hospital.lower()]
         for p_ in problems:

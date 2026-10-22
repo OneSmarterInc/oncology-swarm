@@ -137,6 +137,20 @@ def pattern_from_profile(url: str) -> str | None:
     return "/" + m.group(1) if m else None
 
 
+class HeaderError(ValueError):
+    pass
+
+
+def _check_header(header) -> None:
+    keys = {_LOOKUP.get(_norm_header(h)) for h in header if h}
+    url_cols = {"official_website", "oncology_page_urls", "doctors_list_urls", "sample_profile_url"}
+    if not keys & url_cols:
+        found = ", ".join(str(h) for h in header if h)[:120] or "none"
+        raise HeaderError("This file has no URL column the scraper knows (found: " + found + "). "
+                          "Download the blank template and put one hospital per row, with at least "
+                          "Hospital Name and one of Official Website, Oncology Page URLs or Doctors List URLs.")
+
+
 def _rows(path: Path) -> list[dict]:
     if path.suffix.lower() in (".xlsx", ".xlsm"):
         wb = load_workbook(path, read_only=True, data_only=True)
@@ -145,9 +159,12 @@ def _rows(path: Path) -> list[dict]:
         header = next(it, None) or []
         rows = [dict(zip(header, r)) for r in it]
         wb.close()
+        _check_header(header)
     elif path.suffix.lower() in (".csv", ".txt"):
         with open(path, newline="", encoding="utf-8-sig") as fh:
-            rows = list(csv.DictReader(fh))
+            reader = csv.DictReader(fh)
+            rows = list(reader)
+            _check_header(reader.fieldnames or [])
     else:
         raise ValueError("Hospital list must be .xlsx or .csv")
     out = []

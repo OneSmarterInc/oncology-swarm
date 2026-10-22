@@ -258,3 +258,17 @@ def test_pause_and_resume_single_crawl_and_batch(site_url, tmp_path, monkeypatch
     client.post(f"/api/batch/{bid}/resume")
     done = _wait(client, f"/api/batch/{bid}", lambda s: s["state"] == "done", tries=300)
     assert done["state"] == "done" and len(done["sites"]) == 2
+
+
+def test_ui_helpers_and_friendly_errors(site_url, tmp_path, monkeypatch, capsys):
+    import base64
+    client = TestClient(web.app)
+    assert "app.js" in client.get("/").text and "attachBatch" in client.get("/static/app.js").text
+    assert set(client.get("/api/active").json()) == {"job", "batch"}
+    bad = {"filename": "x.csv", "content_base64": base64.b64encode(b"foo,bar\n1,2\n").decode()}
+    r = client.post("/api/sources/check", json=bad)
+    assert r.status_code == 400 and "no URL column" in r.json()["detail"]
+    p = tmp_path / "x.csv"
+    p.write_text("foo,bar\n1,2\n")
+    assert main(["batch", str(p), "--out", str(tmp_path / "o.xlsx")]) == 2
+    assert "Cannot read" in capsys.readouterr().out

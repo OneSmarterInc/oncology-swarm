@@ -45,6 +45,17 @@ Expect `11 oncologists`. Open `demo.xlsx`.
 
 Open http://127.0.0.1:8000/, paste a URL, click **Start crawl**, watch progress, then **Download Excel**. Use **Test one page** first to see what the extractor reads from a single URL.
 
+### Web UI features
+
+| Feature | How |
+|---|---|
+| Pause / Resume | Pause keeps everything found so far; Resume carries on from the same page or hospital. |
+| Download any time | Excel / CSV / JSON (single site) and the combined Excel (batch) work while a run is going; the file is marked "partial". |
+| Reload the page | A run that is still going is picked up again automatically. |
+| See batch doctors | "Show doctors below" fills the Results table with the batch's oncologists so far. |
+| Check file | Explains wrong or missing columns and rows that need fixing before you start. |
+| Test one page | Shows the page type and each doctor's fields; raw data under "Show raw data". |
+
 ## Use it: command line
 
 | Goal | Command |
