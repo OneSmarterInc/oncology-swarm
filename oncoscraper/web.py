@@ -75,6 +75,27 @@ class Job:
             self.error = f"{type(exc).__name__}: {exc}"
             self.state = "failed"
 
+    def snapshot(self) -> CrawlResult:
+        """What has been found so far, while the crawl is still running (copies; the crawl is not touched)."""
+        from . import oncology
+        from .contacts import demote_shared, demote_sitewide
+        from .models import DoctorRecord
+        from .profile import clean_fields
+        c = self.crawler
+        docs = [DoctorRecord.from_full_dict(d.to_full_dict()) for d in list(c.merger.records)] if c else []
+        for d in docs:
+            clean_fields(d)
+            oncology.veto(d)
+        if c:
+            demote_sitewide(docs, {k: set(v) for k, v in list(c.value_pages.items())})
+        demote_shared(docs)
+        res = CrawlResult([u.strip() for u in self.body.urls if u.strip()], docs, list(c.result_pages) if c else [])
+        onco = [d for d in docs if d.is_oncology]
+        res.stats = {"partial": "yes - downloaded while the crawl was running", "pages_fetched": self.progress.get("fetched", 0),
+                     "doctors_found": len(docs), "oncologists": len(onco),
+                     "seconds": round(time.time() - self.started, 1)}
+        return res
+
     def doctors(self):
         if self.result:
             docs = self.result.doctors
@@ -135,18 +156,32 @@ def stop(job_id: str):
 @app.get("/api/jobs/{job_id}/download.{fmt}")
 def download(job_id: str, fmt: str):
     job = JOBS.get(job_id)
-    if not job or not job.result:
-        raise HTTPException(404, "results not ready")
-    if fmt == "xlsx" and job.xlsx:
-        return FileResponse(job.xlsx, filename=job.xlsx.name,
+    if not job:
+        raise HTTPException(404, "job not found")
+    if fmt not in ("xlsx", "csv", "json"):
+        raise HTTPException(400, "format must be xlsx, csv or json")
+    partial = job.result is None
+    if partial and not job.crawler:
+        raise HTTPException(404, "nothing found yet")
+    try:
+        result = job.snapshot() if partial else job.result
+    except Exception as exc:  # the crawl changed under us; a second click works
+        raise HTTPException(503, f"could not copy results, try again: {exc}") from None
+    tag = "-partial-" + time.strftime("%H%M%S") if partial else ""
+    if fmt == "xlsx":
+        if not partial and job.xlsx:
+            path = job.xlsx
+        else:
+            OUT_DIR.mkdir(exist_ok=True)
+            path = to_xlsx(result, OUT_DIR / f"oncologists-{job.id}{tag}.xlsx")
+        return FileResponse(path, filename=path.name,
                             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if fmt == "csv":
-        return Response(to_csv(job.doctors()).encode("utf-8-sig"), media_type="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="oncologists-{job.id}.csv"'})
-    if fmt == "json":
-        return Response(to_json(job.result, not job.body.all_specialties), media_type="application/json",
-                        headers={"Content-Disposition": f'attachment; filename="oncologists-{job.id}.json"'})
-    raise HTTPException(400, "format must be xlsx, csv or json")
+        docs = result.doctors if job.body.all_specialties else [d for d in result.doctors if d.is_oncology]
+        return Response(to_csv(docs).encode("utf-8-sig"), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="oncologists-{job.id}{tag}.csv"'})
+    return Response(to_json(result, not job.body.all_specialties), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="oncologists-{job.id}{tag}.json"'})
 
 
 @app.post("/api/page")

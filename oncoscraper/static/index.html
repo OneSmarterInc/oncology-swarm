@@ -117,6 +117,7 @@ a { color:var(--accent); }
     <a id="dl-xlsx"><button>Download Excel</button></a>
     <a id="dl-csv"><button class="secondary">CSV</button></a>
     <a id="dl-json"><button class="secondary">JSON</button></a>
+    <span class="hint">While the crawl runs, these give what has been found so far.</span>
   </div>
   <p class="hint" id="error"></p>
 </section>
@@ -151,7 +152,10 @@ $('start').onclick = async () => {
   const r = await fetch('/api/jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   if (!r.ok) { $('error').textContent = await r.text(); return; }
   jobId = (await r.json()).id;
-  $('progress-card').hidden = false; $('results-card').hidden = false; $('downloads').hidden = true; $('error').textContent = '';
+  $('progress-card').hidden = false; $('results-card').hidden = false; $('error').textContent = '';
+  // Downloads work at any time: while running they give what has been found so far.
+  $('downloads').hidden = false;
+  $('dl-xlsx').href = `/api/jobs/${jobId}/download.xlsx`; $('dl-csv').href = `/api/jobs/${jobId}/download.csv`; $('dl-json').href = `/api/jobs/${jobId}/download.json`;
   $('log').textContent = ''; $('start').disabled = true; $('stop').disabled = false;
   clearInterval(timer); timer = setInterval(poll, 1500); poll();
 };

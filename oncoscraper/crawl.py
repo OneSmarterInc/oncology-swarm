@@ -41,6 +41,11 @@ def loose_key(name: str) -> str | None:
     return "".join(re.sub(r"[^a-z]", "", w) for w in words) if len(words) >= 2 else None
 
 
+def _seen_key(url: str) -> str:
+    """www.site.in/x and site.in/x are the same page; crawl it once."""
+    return re.sub(r"^(https?://)www\.", r"\1", url, flags=re.I)
+
+
 def has_initials(name: str) -> bool:
     n = re.sub(r"^(?:dr|prof|professor|doctor)\.?\s+", "", (name or "").lower())
     return any(len(re.sub(r"[^a-z]", "", w)) <= 2 for w in re.split(r"[\s.]+", n) if re.sub(r"[^a-z]", "", w))
@@ -156,7 +161,8 @@ class Crawler:
         self._visited: set[str] = set()
         self.merger = Merger()
         self._onco_profile_urls: set[str] = set()
-        self.value_pages: dict[str, set[str]] = {}  # phone/email -> pages that show it
+        self.value_pages: dict[str, set[str]] = {}
+        self.result_pages: list = []  # phone/email -> pages that show it
         self.blocked: list[str] = []
 
     # -- frontier -----------------------------------------------------------
@@ -189,14 +195,14 @@ class Crawler:
 
     def _push(self, url: str, depth: int, from_onco: bool = False, hint: str = "", start: str = "") -> None:
         url = normalize_url(url)
-        if url in self._queued or depth > self.cfg.max_depth:
+        if _seen_key(url) in self._queued or depth > self.cfg.max_depth:
             return
         if start and not same_site(url, start, self.cfg.include_subdomains):
             return
         score = self._score(url, depth, from_onco, hint)
         if score is None:
             return
-        self._queued.add(url)
+        self._queued.add(_seen_key(url))
         try:
             if not self.fetcher.robots_for(url).allowed(url):
                 self.blocked.append(url)
@@ -247,9 +253,10 @@ class Crawler:
     def run(self, start_urls: list[str]) -> CrawlResult:
         starts = [normalize_url(u if re.match(r"https?://", u) else "https://" + u) for u in start_urls]
         result = CrawlResult(starts)
+        self.result_pages = result.pages  # live page log, read by the UI for partial downloads
         t0 = time.time()
         for s in starts:
-            self._queued.discard(s)
+            self._queued.discard(_seen_key(s))
             self._push(s, 0, hint="pagination")
             if self.cfg.use_sitemaps:
                 for u in self._sitemap_urls(s):
@@ -262,13 +269,13 @@ class Crawler:
         try:
             while self._frontier and fetched < self.cfg.max_pages and not self.stop_event.is_set():
                 _, _, url, depth, from_onco = heapq.heappop(self._frontier)
-                if url in self._visited:
+                if _seen_key(url) in self._visited:
                     continue
-                self._visited.add(url)
+                self._visited.add(_seen_key(url))
                 page = self.fetcher.get(url)
                 fetched += 1
                 if page.final_url != url:
-                    self._visited.add(page.final_url)
+                    self._visited.add(_seen_key(page.final_url))
                 pr: PageResult = extract_page(page)
                 for v in pr.signals.get("page_contacts", []):
                     self.value_pages.setdefault(v, set()).add(page.final_url)

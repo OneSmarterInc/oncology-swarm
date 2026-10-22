@@ -188,3 +188,24 @@ def test_evidence_has_one_row_per_doctor_and_field(site_url, tmp_path, monkeypat
     assert pairs and len(pairs) == len(set(pairs))
     names = [r[0].value for r in wb["Oncologists"].iter_rows(min_row=2)]
     assert len(names) == len(set(names))
+
+
+def test_single_crawl_downloads_while_running(site_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "OUT_DIR", tmp_path)
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    client = TestClient(web.app)
+    jid = client.post("/api/jobs", json={"urls": [site_url + "/specialities/cancer-care"], "max_pages": 40,
+                                         "delay_seconds": 0.4, "render": "never", "use_sitemaps": False}).json()["id"]
+    for _ in range(100):
+        st = client.get(f"/api/jobs/{jid}").json()
+        if st["progress"]["oncologists"] >= 2 or st["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert st["state"] == "running"
+    x = client.get(f"/api/jobs/{jid}/download.xlsx")
+    c = client.get(f"/api/jobs/{jid}/download.csv")
+    j = client.get(f"/api/jobs/{jid}/download.json")
+    assert x.status_code == c.status_code == j.status_code == 200
+    assert x.content[:2] == b"PK" and "partial" in x.headers["content-disposition"]
+    assert c.text.count("\n") >= 3 and '"partial"' in j.text
+    client.post(f"/api/jobs/{jid}/stop")
