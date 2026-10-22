@@ -209,3 +209,52 @@ def test_single_crawl_downloads_while_running(site_url, tmp_path, monkeypatch):
     assert x.content[:2] == b"PK" and "partial" in x.headers["content-disposition"]
     assert c.text.count("\n") >= 3 and '"partial"' in j.text
     client.post(f"/api/jobs/{jid}/stop")
+
+
+def _wait(client, url, cond, tries=150):
+    for _ in range(tries):
+        st = client.get(url).json()
+        if cond(st):
+            return st
+        time.sleep(0.1)
+    return st
+
+
+def test_pause_and_resume_single_crawl_and_batch(site_url, tmp_path, monkeypatch):
+    import base64
+    from oncoscraper.sources import write_template
+    monkeypatch.setattr(web, "OUT_DIR", tmp_path)
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    client = TestClient(web.app)
+    # single crawl
+    jid = client.post("/api/jobs", json={"urls": [site_url + "/specialities/cancer-care"], "max_pages": 30,
+                                         "delay_seconds": 0.3, "render": "never", "use_sitemaps": False}).json()["id"]
+    _wait(client, f"/api/jobs/{jid}", lambda s: s["progress"]["fetched"] >= 2)
+    assert client.post(f"/api/jobs/{jid}/pause").json()["state"] == "paused"
+    time.sleep(0.6)
+    a = client.get(f"/api/jobs/{jid}").json()
+    time.sleep(1.0)
+    b = client.get(f"/api/jobs/{jid}").json()
+    assert a["state"] == b["state"] == "paused" and a["progress"]["fetched"] == b["progress"]["fetched"]
+    assert client.get(f"/api/jobs/{jid}/download.csv").status_code == 200  # download while paused
+    client.post(f"/api/jobs/{jid}/resume")
+    c = _wait(client, f"/api/jobs/{jid}", lambda s: s["progress"]["fetched"] > b["progress"]["fetched"])
+    assert c["progress"]["fetched"] > b["progress"]["fetched"]
+    client.post(f"/api/jobs/{jid}/stop")
+    # batch
+    path = write_template(tmp_path / "b.xlsx", [
+        {"hospital_name": "Sunrise A", "oncology_page_urls": f"{site_url}/specialities/cancer-care"},
+        {"hospital_name": "Sunrise B", "oncology_page_urls": f"{site_url}/faculty/radiation-oncology"}])
+    payload = {"filename": "b.xlsx", "content_base64": base64.b64encode(path.read_bytes()).decode(),
+               "pages_per_site": 4, "delay_seconds": 0.3, "render": "never", "use_sitemaps": False}
+    bid = client.post("/api/batch", json=payload).json()["id"]
+    _wait(client, f"/api/batch/{bid}", lambda s: s["progress"].get("fetched", 0) >= 1)
+    client.post(f"/api/batch/{bid}/pause")
+    time.sleep(0.6)
+    p1 = client.get(f"/api/batch/{bid}").json()
+    time.sleep(1.0)
+    p2 = client.get(f"/api/batch/{bid}").json()
+    assert p1["state"] == "paused" and p1["progress"] == p2["progress"] and p1["sites"] == p2["sites"]
+    client.post(f"/api/batch/{bid}/resume")
+    done = _wait(client, f"/api/batch/{bid}", lambda s: s["state"] == "done", tries=300)
+    assert done["state"] == "done" and len(done["sites"]) == 2

@@ -49,6 +49,7 @@ class Job:
         self.error: str | None = None
         self.started = time.time()
         self.stop = threading.Event()
+        self.pause = threading.Event()
         self.crawler: Crawler | None = None
         self.xlsx: Path | None = None
 
@@ -66,7 +67,7 @@ class Job:
             cfg = ScrapeConfig(max_pages=b.max_pages, max_depth=b.max_depth, delay_seconds=b.delay_seconds,
                                render=b.render, oncology_only=not b.all_specialties, use_sitemaps=b.use_sitemaps,
                                include_subdomains=b.include_subdomains)
-            self.crawler = Crawler(cfg, self.on_event, self.stop)
+            self.crawler = Crawler(cfg, self.on_event, self.stop, self.pause)
             self.result = self.crawler.run([u.strip() for u in b.urls if u.strip()])
             OUT_DIR.mkdir(exist_ok=True)
             self.xlsx = to_xlsx(self.result, OUT_DIR / f"oncologists-{time.strftime('%Y%m%d-%H%M%S')}-{self.id}.xlsx")
@@ -111,6 +112,17 @@ class Job:
 JOBS: dict[str, Job] = {}
 
 
+def _state(job) -> str:
+    return "paused" if job.state == "running" and job.pause.is_set() else job.state
+
+
+def _pause(job, paused: bool) -> dict:
+    if job.state != "running":
+        raise HTTPException(409, f"cannot pause or resume: the run is {job.state}")
+    (job.pause.set if paused else job.pause.clear)()
+    return {"ok": True, "state": _state(job)}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (STATIC / "index.html").read_text(encoding="utf-8")
@@ -139,7 +151,7 @@ def status(job_id: str, since: int = 0):
                                             "experience_years", "hospital", "city", "phone", "email", "contact_phone",
                                             "contact_email", "profile_url", "source_url", "is_oncology", "page_type")}
                     | {"fields": len(d.filled_fields())})
-    return {"id": job.id, "state": job.state, "error": job.error, "progress": job.progress,
+    return {"id": job.id, "state": _state(job), "error": job.error, "progress": job.progress,
             "max_pages": job.body.max_pages, "elapsed": round(time.time() - job.started),
             "stats": job.result.stats if job.result else None, "log": list(job.log)[-60:], "doctors": rows}
 
@@ -151,6 +163,22 @@ def stop(job_id: str):
         raise HTTPException(404, "job not found")
     job.stop.set()
     return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/pause")
+def pause_job(job_id: str):
+    job = JOBS.get(job_id) or _missing("job")
+    return _pause(job, True)
+
+
+@app.post("/api/jobs/{job_id}/resume")
+def resume_job(job_id: str):
+    job = JOBS.get(job_id) or _missing("job")
+    return _pause(job, False)
+
+
+def _missing(what: str):
+    raise HTTPException(404, f"{what} not found")
 
 
 @app.get("/api/jobs/{job_id}/download.{fmt}")
@@ -253,6 +281,7 @@ class BatchJob:
         self.error: str | None = None
         self.started = time.time()
         self.stop = threading.Event()
+        self.pause = threading.Event()
         self.xlsx: Path | None = None
         self.live: dict = {}
 
@@ -276,7 +305,8 @@ class BatchJob:
             OUT_DIR.mkdir(exist_ok=True)
             out = OUT_DIR / f"batch-{time.strftime('%Y%m%d-%H%M%S')}-{self.id}.xlsx"
             self.xlsx = run_batch(self.sources, out, base, b.pages_per_site, resume=False,
-                                  progress=self._capture, stop_event=self.stop, live=self.live)
+                                  progress=self._capture, stop_event=self.stop, live=self.live,
+                                  pause_event=self.pause)
             self.state = "stopped" if self.stop.is_set() else "done"
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
@@ -328,7 +358,7 @@ def batch_status(job_id: str):
     job = BATCHES.get(job_id)
     if not job:
         raise HTTPException(404, "batch not found")
-    return {"id": job.id, "state": job.state, "error": job.error, "current": job.current, "index": job.index,
+    return {"id": job.id, "state": _state(job), "error": job.error, "current": job.current, "index": job.index,
             "total": len(job.sources), "elapsed": round(time.time() - job.started), "progress": job.progress,
             "sites": job.sites, "stats": job.stats, "log": list(job.log)[-60:]}
 
@@ -340,6 +370,18 @@ def batch_stop(job_id: str):
         raise HTTPException(404, "batch not found")
     job.stop.set()
     return {"ok": True}
+
+
+@app.post("/api/batch/{job_id}/pause")
+def pause_batch(job_id: str):
+    job = BATCHES.get(job_id) or _missing("batch")
+    return _pause(job, True)
+
+
+@app.post("/api/batch/{job_id}/resume")
+def resume_batch(job_id: str):
+    job = BATCHES.get(job_id) or _missing("batch")
+    return _pause(job, False)
 
 
 @app.get("/api/batch/{job_id}/download.xlsx")

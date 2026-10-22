@@ -108,7 +108,8 @@ CONTACT_FIELDS = ("phone", "email", "contact_phone", "contact_email")
 
 def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_site_pages: int,
               resume: bool = True, progress: Callable[[dict], None] | None = None,
-              stop_event: threading.Event | None = None, live: dict | None = None) -> Path:
+              stop_event: threading.Event | None = None, live: dict | None = None,
+              pause_event: threading.Event | None = None) -> Path:
     progress = progress or (lambda e: None)
     stop_event = stop_event or threading.Event()
     out = Path(out)
@@ -121,6 +122,8 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
     if live is not None:  # lets the web UI write a partial Excel at any time
         live.update(merger=merger, pages=pages, summary=summary, sources=sources, crawler=None, src=None, t0=t0)
     for i, src in enumerate(sources, 1):
+        while pause_event is not None and pause_event.is_set() and not stop_event.is_set():
+            time.sleep(0.3)
         if stop_event.is_set():
             break
         slug = f"{_slug(src.hospital)}-r{src.row}"
@@ -138,7 +141,7 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
                 "render": src.render or base.render,
             })
             try:
-                crawler = Crawler(cfg, progress, stop_event)
+                crawler = Crawler(cfg, progress, stop_event, pause_event)
                 if live is not None:
                     live.update(crawler=crawler, src=src)
                 res = crawler.run(src.urls)

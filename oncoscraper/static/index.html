@@ -38,7 +38,7 @@ th { z-index:1; }
 td.contact { white-space:nowrap; font-weight:600; } td.muted { color:var(--muted); font-size:12px; }
 .ok { color:var(--ok); } .warn { color:#9a6700; } .bad { color:var(--bad); }
 .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:#e3efef; color:var(--accent-2); }
-.state { font-weight:700; } .state.failed { color:var(--bad); } .state.done { color:var(--ok); }
+.state { font-weight:700; } .state.failed { color:var(--bad); } .state.done { color:var(--ok); } .state.paused { color:#9a6700; }
 pre.json { background:var(--bg); padding:12px; border-radius:8px; overflow:auto; max-height:420px; font-size:12px; }
 a { color:var(--accent); }
 @media (prefers-color-scheme: dark) {
@@ -67,7 +67,7 @@ a { color:var(--accent); }
     <label class="check"><input type="checkbox" id="b-all"> Keep all specialities</label>
     <label class="check"><input type="checkbox" id="b-sitemap" checked> Use sitemap.xml</label>
   </div>
-  <div class="row"><button id="b-start" type="button">Start batch</button><button id="b-stop" class="secondary" type="button" disabled>Stop</button>
+  <div class="row"><button id="b-start" type="button">Start batch</button><button id="b-pause" class="secondary" type="button" disabled>Pause</button><button id="b-stop" class="secondary" type="button" disabled>Stop</button>
     <span class="hint" id="b-status"></span></div>
   <div id="b-progress" hidden>
     <div class="bar"><i id="b-bar"></i></div>
@@ -98,7 +98,7 @@ a { color:var(--accent); }
     <label class="check"><input type="checkbox" id="sitemap" checked> Use sitemap.xml</label>
     <label class="check"><input type="checkbox" id="subdomains"> Include subdomains</label>
   </div>
-  <div class="row"><button id="start">Start crawl</button><button id="stop" class="secondary" disabled>Stop</button>
+  <div class="row"><button id="start">Start crawl</button><button id="pause" class="secondary" disabled>Pause</button><button id="stop" class="secondary" disabled>Stop</button>
   <span class="hint">robots.txt is always respected. Only the same website is crawled.</span></div>
 </section>
 
@@ -157,9 +157,17 @@ $('start').onclick = async () => {
   $('downloads').hidden = false;
   $('dl-xlsx').href = `/api/jobs/${jobId}/download.xlsx`; $('dl-csv').href = `/api/jobs/${jobId}/download.csv`; $('dl-json').href = `/api/jobs/${jobId}/download.json`;
   $('log').textContent = ''; $('start').disabled = true; $('stop').disabled = false;
+  $('pause').disabled = false; $('pause').textContent = 'Pause';
   clearInterval(timer); timer = setInterval(poll, 1500); poll();
 };
-$('stop').onclick = async () => { if (jobId) await fetch(`/api/jobs/${jobId}/stop`, {method:'POST'}); $('stop').disabled = true; };
+$('stop').onclick = async () => { if (jobId) await fetch(`/api/jobs/${jobId}/stop`, {method:'POST'}); $('stop').disabled = true; $('pause').disabled = true; };
+// Pause keeps everything found so far and waits; Resume carries on from the same place.
+async function togglePause(btn, base) {
+  const action = btn.textContent === 'Pause' ? 'pause' : 'resume';
+  const r = await fetch(`${base}/${action}`, {method:'POST'});
+  if (r.ok) btn.textContent = action === 'pause' ? 'Resume' : 'Pause';
+}
+$('pause').onclick = () => jobId && togglePause($('pause'), `/api/jobs/${jobId}`);
 
 async function poll() {
   const r = await fetch(`/api/jobs/${jobId}`); if (!r.ok) return;
@@ -175,8 +183,9 @@ async function poll() {
   }).join('\n');
   $('log').scrollTop = $('log').scrollHeight;
   rows = j.doctors; render();
-  if (j.state !== 'running') {
-    clearInterval(timer); $('start').disabled = false; $('stop').disabled = true;
+  $('pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
+  if (j.state !== 'running' && j.state !== 'paused') {
+    clearInterval(timer); $('start').disabled = false; $('stop').disabled = true; $('pause').disabled = true;
     if (j.error) $('error').textContent = j.error;
     if (j.stats) {
       $('downloads').hidden = false;
@@ -234,22 +243,25 @@ $('b-start').onclick = async () => {
   $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;
   $('b-dl-btn').textContent = 'Download results so far'; $('b-totals').textContent = 'Partial file: finished hospitals plus the one being crawled now.';
   $('b-status').textContent = `${j.hospitals} hospitals queued` + (j.problems.length ? `, ${j.problems.length} rows skipped` : '');
-  $('b-start').disabled = true; $('b-stop').disabled = false;
+  $('b-start').disabled = true; $('b-stop').disabled = false; $('b-pause').disabled = false; $('b-pause').textContent = 'Pause';
   clearInterval(batchTimer); batchTimer = setInterval(pollBatch, 2000); pollBatch();
 };
-$('b-stop').onclick = async () => { if (batchId) await fetch(`/api/batch/${batchId}/stop`, {method:'POST'}); $('b-stop').disabled = true; };
+$('b-stop').onclick = async () => { if (batchId) await fetch(`/api/batch/${batchId}/stop`, {method:'POST'}); $('b-stop').disabled = true; $('b-pause').disabled = true; };
+$('b-pause').onclick = () => batchId && togglePause($('b-pause'), `/api/batch/${batchId}`);
 async function pollBatch() {
   const r = await fetch(`/api/batch/${batchId}`); if (!r.ok) return; const j = await r.json();
   $('b-idx').textContent = `${j.index}/${j.total}`; $('b-time').textContent = j.elapsed + 's';
   $('b-pagesnow').textContent = j.progress.fetched || 0; $('b-onconow').textContent = j.progress.oncologists || 0;
   $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
-  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}` : `Batch ${j.state}`;
+  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}`
+    : j.state === 'paused' ? `Paused at: ${j.current} (press Resume to carry on)` : `Batch ${j.state}`;
+  $('b-pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
   const wrap = $('b-wrap'), keep = wrap.scrollTop;  // keep the user's scroll position on refresh
   $('b-sites').innerHTML = j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${(s.status==='error'||s.status==='failed')?'bad':'ok'}">${esc(s.status)}</td>
     <td>${s.pages}</td><td>${s.oncologists}</td><td>${s.with_phone}</td><td>${s.with_email}</td><td>${s.with_any_contact}</td><td class="muted">${esc(s.note)}</td></tr>`).join('');
   wrap.scrollTop = keep;
-  if (j.state !== 'running') {
-    clearInterval(batchTimer); $('b-start').disabled = false; $('b-stop').disabled = true;
+  if (j.state !== 'running' && j.state !== 'paused') {
+    clearInterval(batchTimer); $('b-start').disabled = false; $('b-stop').disabled = true; $('b-pause').disabled = true;
     if (j.error) $('b-status').textContent = j.error;
     if (j.stats) {
       $('b-dl').hidden = false; $('b-dl-xlsx').href = `/api/batch/${batchId}/download.xlsx`;

@@ -150,8 +150,9 @@ class CrawlResult:
 
 class Crawler:
     def __init__(self, cfg: ScrapeConfig, progress: Callable[[dict], None] | None = None,
-                 stop_event: threading.Event | None = None):
+                 stop_event: threading.Event | None = None, pause_event: threading.Event | None = None):
         self.cfg = cfg.validate()
+        self.pause_event = pause_event or threading.Event()  # set = paused
         self.fetcher = Fetcher(cfg)
         self.progress = progress or (lambda e: None)
         self.stop_event = stop_event or threading.Event()
@@ -268,6 +269,10 @@ class Crawler:
         counts = {"profile": 0, "listing": 0, "other": 0, "error": 0}
         try:
             while self._frontier and fetched < self.cfg.max_pages and not self.stop_event.is_set():
+                while self.pause_event.is_set() and not self.stop_event.is_set():
+                    time.sleep(0.3)  # paused: keep everything found so far and wait for Resume
+                if self.stop_event.is_set():
+                    break
                 _, _, url, depth, from_onco = heapq.heappop(self._frontier)
                 if _seen_key(url) in self._visited:
                     continue
