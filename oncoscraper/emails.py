@@ -60,11 +60,27 @@ def decode_protected(soup: BeautifulSoup) -> int:
     return count
 
 
+# Endings an address can really have. Prose such as "served@ Dr. Ram" or "observer@St. Jude"
+# looks like an email to a regex; its ending (.ram, .jude) is not a real domain ending.
+REAL_TLDS = set("""
+com org net edu gov mil int info biz co io ai me us uk in ae sa qa om kw bh sg my lk np bd pk au nz ca de fr it es nl
+be ch at se no dk fi ie pt pl cz ru ua jp cn hk tw kr th ph id vn za ng ke eg br mx ar cl health care clinic hospital
+doctor doctors med medical email online today live academy institute center centre foundation global world tech
+example test
+""".split())
+
+
 def _valid(addr: str) -> bool:
     addr = addr.strip(".").lower()
     if not EMAIL_RE.fullmatch(addr) or ASSET_SUFFIX.search(addr):
         return False
-    return not IGNORE_DOMAINS.search(addr.split("@", 1)[1])
+    local, domain = addr.split("@", 1)
+    labels = domain.split(".")
+    if labels[-1] not in REAL_TLDS or any(not lab for lab in labels):
+        return False
+    if len(labels) == 2 and len(labels[0]) < 2:
+        return False
+    return not IGNORE_DOMAINS.search(domain)
 
 
 def find(text: str) -> list[str]:

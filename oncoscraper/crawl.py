@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 from .config import ScrapeConfig
-from .contacts import demote_shared
+from .contacts import demote_shared, demote_sitewide
 from .dom import same_site
 from .extract import extract_page
 from .fetch import Fetcher, normalize_url
@@ -119,6 +119,7 @@ class Crawler:
         self._visited: set[str] = set()
         self.merger = Merger()
         self._onco_profile_urls: set[str] = set()
+        self.value_pages: dict[str, set[str]] = {}  # phone/email -> pages that show it
         self.blocked: list[str] = []
 
     # -- frontier -----------------------------------------------------------
@@ -232,6 +233,8 @@ class Crawler:
                 if page.final_url != url:
                     self._visited.add(page.final_url)
                 pr: PageResult = extract_page(page)
+                for v in pr.signals.get("page_contacts", []):
+                    self.value_pages.setdefault(v, set()).add(page.final_url)
                 counts[pr.page_type] = counts.get(pr.page_type, 0) + 1
                 note = page.error or ("rendered" if page.rendered else "")
                 result.pages.append(PageLog(page.final_url, page.status, pr.page_type, len(pr.doctors), depth, note))
@@ -267,6 +270,7 @@ class Crawler:
         finally:
             self.fetcher.close()
         result.doctors = self.merger.records
+        demote_sitewide(result.doctors, self.value_pages)
         demote_shared(result.doctors)
         result.stats = {
             "pages_fetched": fetched, "requests": self.fetcher.requests_made, "page_types": counts,

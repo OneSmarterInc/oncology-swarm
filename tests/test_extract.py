@@ -199,7 +199,7 @@ def test_phones_doctor_vs_desk_and_formats():
     <p>Reg. No. KMC-1234567890. Fax: 080-2502 4445</p></main></body></html>"""
     d = extract_page(Page("https://hosp.example/doctors/dr-kavya-iyer", "https://hosp.example/doctors/dr-kavya-iyer", 200, html)).doctors[0]
     assert d.get("phone") == "+91 98110 12345; +91 98450 98450"
-    assert d.get("contact_phone") == "+91 80 2502 4444; 1800-102-1010"
+    assert d.get("contact_phone") == "+91 80 2502 4444"  # toll-free numbers are left out
     assert "2651" not in (d.get("phone") or "") + (d.get("contact_phone") or "")  # header ignored, fax ignored
 
 
@@ -233,3 +233,48 @@ def test_shared_number_moves_to_hospital_column():
     assert recs[0].get("phone") == "+91 98222 00000"
     assert recs[1].get("phone") is None and recs[1].get("contact_phone") == "+91 98111 00000"
     assert recs[2].get("contact_email") == "appointments-team@h.example"
+
+
+def test_phone_anomalies_from_real_runs():
+    from oncoscraper import phones
+    # page-number runs read as phones (Max: '+91 10 1112 1314')
+    assert phones.find("Page 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25") == []
+    assert phones.find("1011121314") == []
+    # same mobile in two spacings becomes one value
+    assert phones.normalise("+91 926 888 0303") == phones.normalise("+91 92688 80303") == "+91 92688 80303"
+    # landlines with STD codes still read as landlines
+    assert phones.normalise("080 4110 0000") == "+91 80 4110 0000"
+    assert phones.normalise("0674 230 1234") == "+91 674 230 1234"
+    # toll-free left out
+    assert phones.find("Toll free 1800-208-2000") == []
+    # lists of numbers still work
+    assert [n for n, _ in phones.find("Mob: 98110 12345, 98110 54321")] == ["+91 98110 12345", "+91 98110 54321"]
+
+
+def test_prose_is_not_an_email():
+    from oncoscraper import emails
+    text = "served@Dr.Ram, observer@st.jude, consultant@aoi-imphal.dm, info@rgcirc.org; oncology@rgcirc.he, x@hosp.co.in"
+    assert emails.find(text) == ["info@rgcirc.org", "x@hosp.co.in"]
+
+
+def test_branch_number_on_every_page_is_not_the_doctors():
+    """MOC-style: each profile's data carries the branch number, which the site also lists on every page."""
+    from oncoscraper.contacts import demote_shared, demote_sitewide
+    from oncoscraper.models import DoctorRecord
+    a = DoctorRecord(source_url="https://moc.in/our-team/dr-a")
+    a.set("name", "Dr. A", "h1"); a.set("phone", "+91 85919 37291", "jsonld")
+    b = DoctorRecord(source_url="https://moc.in/our-team/dr-b")
+    b.set("name", "Dr. B", "h1"); b.set("phone", "+91 91378 57037", "jsonld")
+    c = DoctorRecord(source_url="https://moc.in/our-team/dr-c")
+    c.set("name", "Dr. C", "h1"); c.set("phone", "+91 98111 22233", "labels")
+    pages = {"+91 85919 37291": {f"https://moc.in/p{i}" for i in range(20)},
+             "+91 91378 57037": {"https://moc.in/our-team/dr-b"},
+             "+91 98111 22233": {"https://moc.in/our-team/dr-c"}}
+    demote_sitewide([a, b, c], pages)
+    assert a.get("phone") is None and a.get("contact_phone") == "+91 85919 37291"
+    assert b.get("phone") == "+91 91378 57037" and c.get("phone") == "+91 98111 22233"
+    # the same number on two doctors is a shared desk/branch number
+    d = DoctorRecord(source_url="https://moc.in/our-team/dr-d")
+    d.set("name", "Dr. D", "h1"); d.set("phone", "+91 98111 22233", "jsonld")
+    demote_shared([c, d])
+    assert c.get("phone") is None and d.get("contact_phone") == "+91 98111 22233"

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import ScrapeConfig
-from .contacts import demote_shared
+from .contacts import demote_shared, demote_sitewide
 from .crawl import Crawler, CrawlResult, Merger, PageLog
 from .export import to_xlsx
 from .models import DoctorRecord
@@ -71,8 +71,9 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
     summary = [dict(r) for r in live.get("summary") or []]
     crawler, src = live.get("crawler"), live.get("src")
     if crawler is not None and src is not None:
-        for d in list(crawler.merger.records):
-            c = DoctorRecord.from_full_dict(d.to_full_dict())
+        current = [DoctorRecord.from_full_dict(d.to_full_dict()) for d in list(crawler.merger.records)]
+        demote_sitewide(current, {k: set(v) for k, v in list(crawler.value_pages.items())})
+        for c in current:
             c.source_hospital = src.hospital
             merger.add(c)
     demote_shared(merger.records)

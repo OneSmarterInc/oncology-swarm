@@ -29,10 +29,14 @@ def _cell(value):
         return ""
     if isinstance(value, list):
         value = "; ".join(str(v) for v in value)
+    return str(value)[:32000]
+
+
+def _csv_safe(value):
     value = str(value)
     if value[:1] in ("=", "+", "-", "@"):
-        value = "'" + value  # never let page text become a spreadsheet formula
-    return value[:32000]
+        value = "'" + value  # never let page text become a spreadsheet formula in CSV
+    return value
 
 
 def row(rec: DoctorRecord) -> list:
@@ -48,6 +52,9 @@ def _sheet(wb, title, headers, rows, widths=None):
     ws.append(headers)
     for r in rows:
         ws.append(r)
+        for cell in ws[ws.max_row]:
+            if isinstance(cell.value, str) and cell.value.startswith("="):
+                cell.data_type = "s"  # page text stays text, never a formula; "+91 ..." shows as is
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="164E63")
@@ -110,7 +117,7 @@ def to_csv(doctors: list[DoctorRecord]) -> str:
     w = csv.writer(buf)
     w.writerow(COLUMNS + META_COLUMNS)
     for d in doctors:
-        w.writerow(row(d))
+        w.writerow([_csv_safe(v) for v in row(d)])
     return buf.getvalue()
 
 

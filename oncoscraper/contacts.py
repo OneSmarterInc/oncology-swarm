@@ -10,11 +10,37 @@ from collections import Counter
 
 from .models import DoctorRecord
 
-SHARED_THRESHOLD = 3  # seen on this many different doctors -> hospital/desk contact
+SHARED_THRESHOLD = 2  # seen on this many different doctors -> hospital/desk contact
 
 
 def _split(value) -> list[str]:
     return [v for v in (value or "").split("; ") if v]
+
+
+def _move(r: DoctorRecord, own: str, desk: str, gone: list[str]) -> None:
+    keep = [v for v in _split(r.get(own)) if v not in gone]
+    if keep:
+        r.values[own] = "; ".join(keep)
+    else:
+        r.values.pop(own, None)
+        r.layers.pop(own, None)
+    existing = _split(r.get(desk))
+    r.values[desk] = "; ".join(dict.fromkeys(existing + gone))
+    r.layers.setdefault(desk, "patterns")
+
+
+def demote_sitewide(records: list[DoctorRecord], value_pages: dict[str, set[str]], extra_pages: int = 2) -> int:
+    """A doctor's number or email that the site also shows on pages that are not about that doctor
+    (the header, footer, a branch contact list repeated on every page) belongs to the hospital."""
+    moved = 0
+    for r in records:
+        mine = {u for u in [r.source_url, r.profile_url, *r.found_on] if u}
+        for own, desk in (("phone", "contact_phone"), ("email", "contact_email")):
+            gone = [v for v in _split(r.get(own)) if len(value_pages.get(v, set()) - mine) >= extra_pages]
+            if gone:
+                _move(r, own, desk, gone)
+                moved += len(gone)
+    return moved
 
 
 def demote_shared(records: list[DoctorRecord], threshold: int = SHARED_THRESHOLD) -> int:

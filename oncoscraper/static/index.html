@@ -33,6 +33,8 @@ table { width:100%; border-collapse:collapse; font-size:13px; }
 th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { background:var(--bg); position:sticky; top:0; }
 .tablewrap { max-height:560px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+.tablewrap.sites { max-height:340px; overflow-y:scroll; }
+th { z-index:1; }
 td.contact { white-space:nowrap; font-weight:600; } td.muted { color:var(--muted); font-size:12px; }
 .ok { color:var(--ok); } .warn { color:#9a6700; } .bad { color:var(--bad); }
 .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; background:#e3efef; color:var(--accent-2); }
@@ -76,7 +78,7 @@ a { color:var(--accent); }
       <div class="stat"><span>Elapsed</span><b id="b-time">0s</b></div>
     </div>
     <p class="hint" id="b-current"></p>
-    <div class="tablewrap" style="margin-top:10px"><table>
+    <div class="tablewrap sites" id="b-wrap" style="margin-top:10px"><table>
       <thead><tr><th>Row</th><th>Hospital</th><th>Status</th><th>Pages</th><th>Oncologists</th><th>With doctor phone</th><th>With doctor email</th><th>With any contact</th><th>Note</th></tr></thead>
       <tbody id="b-sites"></tbody></table></div>
     <div class="row" id="b-dl" hidden><a id="b-dl-xlsx"><button type="button" id="b-dl-btn">Download combined Excel</button></a><span class="hint" id="b-totals"></span></div>
@@ -238,8 +240,10 @@ async function pollBatch() {
   $('b-pagesnow').textContent = j.progress.fetched || 0; $('b-onconow').textContent = j.progress.oncologists || 0;
   $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
   $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}` : `Batch ${j.state}`;
+  const wrap = $('b-wrap'), keep = wrap.scrollTop;  // keep the user's scroll position on refresh
   $('b-sites').innerHTML = j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${(s.status==='error'||s.status==='failed')?'bad':'ok'}">${esc(s.status)}</td>
     <td>${s.pages}</td><td>${s.oncologists}</td><td>${s.with_phone}</td><td>${s.with_email}</td><td>${s.with_any_contact}</td><td class="muted">${esc(s.note)}</td></tr>`).join('');
+  wrap.scrollTop = keep;
   if (j.state !== 'running') {
     clearInterval(batchTimer); $('b-start').disabled = false; $('b-stop').disabled = true;
     if (j.error) $('b-status').textContent = j.error;

@@ -66,6 +66,19 @@ def candidate_record(cand: structured.Candidate, url: str) -> DoctorRecord | Non
     return rec
 
 
+def _page_contacts(soup) -> list[str]:
+    """Every phone and email the whole page shows (header, footer and contact lists included)."""
+    from . import phones
+    body = soup.body or soup
+    text = " | ".join(body.get_text(" | ", strip=True).split(" | "))
+    found = [n for n, _ in phones.find(text)] + [n for n, _ in phones.from_links(body)]
+    found += emails.find(text) + emails.from_links(body)
+    for node in soup.find_all("script", type="application/ld+json"):  # structured data too
+        raw = node.string or ""
+        found += [n for n, _ in phones.find(raw.replace('"', " | "))] + emails.find(raw)
+    return list(dict.fromkeys(found))
+
+
 def extract_page(page: Page) -> PageResult:
     url = page.final_url
     if page.error or not page.html:
@@ -80,6 +93,7 @@ def extract_page(page: Page) -> PageResult:
     all_links = links(soup, url)
     main = main_content(soup)
     lines = annotate(main)
+    page_contacts = _page_contacts(soup)
 
     struct_docs = ld_docs + md_docs
     h1 = soup.find("h1")
@@ -169,6 +183,7 @@ def extract_page(page: Page) -> PageResult:
             finalize(r, [], r.profile_url or url)
         oncology.score(r, page_context)
         result.doctors.append(r)
+    result.signals["page_contacts"] = page_contacts
     if result.page_type != "profile" and len(result.doctors) >= 1:
         result.page_type = "listing"
     # Profile links found in cards come first so the crawler follows them.

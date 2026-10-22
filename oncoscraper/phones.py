@@ -43,11 +43,28 @@ def _national(digits: str) -> str | None:
         return None
     if len(set(digits)) <= 2:  # 9999999999, 1212121212 and similar placeholders
         return None
+    if _is_sequence(digits) or digits.startswith("10"):  # page numbers '10 11 12 13 14'; no STD code starts 10
+        return None
     return digits
 
 
+def _is_sequence(digits: str) -> bool:
+    """'1011121314', '1516171819', '0123456789': counting runs, not phone numbers."""
+    for size in (1, 2):
+        chunks = [int(digits[i:i + size]) for i in range(0, len(digits) - len(digits) % size, size)]
+        steps = {b - a for a, b in zip(chunks, chunks[1:])}
+        if len(chunks) >= 4 and len(steps) == 1 and steps <= {1, -1}:
+            return True
+    return False
+
+
+# Two-digit STD codes that start like a mobile number (Bengaluru, Ahmedabad).
+STD_6TO8 = ("80", "79")
+
+
 def normalise(raw: str) -> str | None:
-    """'011-4055 4055' -> '+91 11 4055 4055'; '98110 12345' -> '+91 98110 12345'; toll-free kept as 1800-xxx-xxxx."""
+    """'011-4055 4055' -> '+91 11 4055 4055'; '98110 12345' -> '+91 98110 12345'; toll-free as 1800-xxx-xxxx
+    (toll-free numbers are recognised so they can be left out; see find())."""
     m = TOLL_FREE_RE.search(raw)
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -60,8 +77,15 @@ def normalise(raw: str) -> str | None:
     std_m = (re.match(r"^\s*(?:\+\s?91|0091)?[\s.-]*\(\s*0?(\d{2,4})\s*\)", raw)
              or re.match(r"^\s*0(\d{2,4})[\s.-]+\d", raw)
              or re.match(r"^\s*(?:\+\s?91|0091)[\s.-]*0?(\d{2,4})[\s.-]+\d{3,4}[\s.-]?\d{3,4}\s*$", raw))
-    if nat[0] in "6789" and not std_m:
-        return f"+91 {nat[:5]} {nat[5:]}"
+    if nat[0] in "6789":
+        # 9 never starts an STD code. 6/7/8 only when the STD code is written separately AND the
+        # local part looks like a landline (starts 2-6); otherwise it is a mobile, whatever the spacing.
+        std = std_m.group(1) if std_m and nat.startswith(std_m.group(1)) else ""
+        local = nat[len(std):]
+        landline = (nat[0] != "9" and std and local[:1] in "23456"
+                    and (len(std) >= 3 or std in STD_6TO8))
+        if not landline:
+            return f"+91 {nat[:5]} {nat[5:]}"
     std = std_m.group(1) if std_m and nat.startswith(std_m.group(1)) else nat[:2]
     rest = nat[len(std):]
     return f"+91 {std} {rest[:-4]} {rest[-4:]}".replace("  ", " ")
@@ -102,8 +126,11 @@ def find(text: str) -> list[tuple[str, str]]:
         prev_end = end
         if NOT_PHONE_CONTEXT.search(before):
             continue
+        # Part of a longer run of numbers (page numbers, tables of figures): not a phone.
+        if re.match(r"\s{1,2}\d{1,2}(?!\d)", text[end:end + 5]) or re.search(r"(?<!\d)\d{1,2}\s{1,2}$", text[max(0, start - 5):start]):
+            continue
         num = normalise(raw)
-        if num and num not in seen:
+        if num and not is_toll_free(num) and num not in seen:
             seen.add(num)
             out.append((num, before))
     return out
@@ -126,7 +153,7 @@ def from_links(node) -> list[tuple[str, str]]:
         if not raw:
             continue
         num = normalise(raw)
-        if num and num not in seen:
+        if num and not is_toll_free(num) and num not in seen:
             seen.add(num)
             context = " ".join(a.get_text(" ", strip=True).split())
             parent = " ".join(a.parent.get_text(" ", strip=True).split()) if a.parent else ""
