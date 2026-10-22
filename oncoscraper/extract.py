@@ -141,12 +141,15 @@ def extract_page(page: Page) -> PageResult:
     # A page listing three or more other doctors with links is a listing, even if one name sits in the h1
     # (AOI '/our-doctors/clinical-oncologists' put the first doctor's name in a heading).
     linked_cards = {normalize_url(urljoin(url, c.profile_url)) for c in card_recs if c.profile_url} - {normalize_url(url)}
-    if profile_evidence and name and len(linked_cards) >= 3:
-        sur = _surname(name)
-        if sur not in urlsplit(url).path.lower():
+    if profile_evidence and name and len(linked_cards) >= 3 and not tpl_cards:
+        # Only when the heading doctor is themselves one of the linked cards; a real profile with a
+        # 'related doctors' strip keeps its own doctor.
+        all_cards = listing.cards(main, url, set())
+        in_cards = [c for c in all_cards if (c.get("name") or "").casefold() == name.casefold() and c.profile_url
+                    and normalize_url(urljoin(url, c.profile_url)) != normalize_url(url)]
+        if in_cards:
             profile_evidence = False
-            if not tpl_cards:  # the heading doctor is one of the cards: read the cards again with them included
-                card_recs = listing.cards(main, url, set()) or card_recs
+            card_recs = all_cards
     signals = {"h1": h1_text[:120], "name": name, "name_source": name_src, "name_evidence": name_ev[:200], "cards": len(card_recs),
                "table_rows": len(table_recs), "jsonld_doctors": len(ld_docs), "microdata_doctors": len(md_docs),
                "embedded_doctors": len(emb_docs), "template": bool(tpl_hit or tpl_cards)}

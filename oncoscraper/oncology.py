@@ -38,6 +38,8 @@ OTHER_SPECIALTY = re.compile(
     r"psychiat|dental|dentist|gyna?ecolog(?!.*onc)|obstetric|ivf|infertility|pulmonolog|chest physician|"
     r"rheumat|endocrin|diabet|gastroenterolog(?!.*onc)|hepatolog|urolog(?!.*onc)|plastic surg(?!.*onc)|bariatric|"
     r"cosmetic|ayurved|homoeo|homeo", re.I)
+DOCTOR_WORD = re.compile(r"consultant|oncologist|surgeon|physician|director|professor|\bhod\b|\bhead\b|"
+                         r"radiologist|patholog|haematologist|hematologist|\bdr\b|registrar|resident", re.I)
 ONCO_IN_TITLE = re.compile(r"onco|cancer|tumou?r|haemat|hemat|bmt|bone marrow|leuk|lymph|radiother|radiation|"
                            r"nuclear medicine|pet[- ]?ct", re.I)
 
@@ -46,7 +48,8 @@ def veto(rec: DoctorRecord) -> bool:
     """Not an oncologist whatever the page says: non-doctor staff, or another speciality in the title.
     A cardiologist whose bio mentions 'oncology' is still a cardiologist."""
     own_title = " | ".join(str(rec.get(f) or "") for f in ("designation", "specialty", "department"))
-    if NON_DOCTOR.search(own_title) or (OTHER_SPECIALTY.search(own_title) and not ONCO_IN_TITLE.search(own_title)):
+    staff = NON_DOCTOR.search(own_title) and not DOCTOR_WORD.search(own_title)
+    if staff or (OTHER_SPECIALTY.search(own_title) and not ONCO_IN_TITLE.search(own_title)):
         rec.oncology_score = 0.0
         rec.oncology_terms = ["not an oncologist: " + own_title[:80]]
         return True

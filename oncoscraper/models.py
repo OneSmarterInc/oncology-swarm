@@ -70,7 +70,9 @@ class DoctorRecord:
         if value is None:
             return False
         if isinstance(value, str):
-            value = " ".join(html.unescape(html.unescape(value)).split()).strip(" ,;:|-")  # '&amp;#038;' -> '&'
+            if not name.endswith("_url"):  # URLs keep '&region=' etc. exactly
+                value = html.unescape(html.unescape(value))  # '&amp;#038;' -> '&'
+            value = " ".join(value.split()).strip(" ,;:|-")
             if not value:
                 return False
         src = source_url or self.source_url

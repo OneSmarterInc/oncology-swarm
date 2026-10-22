@@ -41,6 +41,11 @@ def loose_key(name: str) -> str | None:
     return "".join(re.sub(r"[^a-z]", "", w) for w in words) if len(words) >= 2 else None
 
 
+def has_initials(name: str) -> bool:
+    n = re.sub(r"^(?:dr|prof|professor|doctor)\.?\s+", "", (name or "").lower())
+    return any(len(re.sub(r"[^a-z]", "", w)) <= 2 for w in re.split(r"[\s.]+", n) if re.sub(r"[^a-z]", "", w))
+
+
 def url_key(url: str | None) -> str | None:
     if not url:
         return None
@@ -63,17 +68,27 @@ class Merger:
         key_n = name_key(rec.get("name", ""))
         target = self._by_url.get(key_u) if key_u else None
         if target is None and key_n:
-            for cand in self._by_name.get(key_n, []) + self._by_loose.get(loose_key(rec.get("name", "")), []):
+            loose = loose_key(rec.get("name", ""))
+            exact = self._by_name.get(key_n, [])
+            candidates = [(c, True) for c in exact] + [(c, False) for c in self._by_loose.get(loose, []) if c not in exact]
+            for cand, is_exact in candidates:
                 h1, h2 = (cand.get("hospital") or "").lower(), (rec.get("hospital") or "").lower()
                 same_hosp = not h1 or not h2 or h1[:12] == h2[:12] or h1 in h2 or h2 in h1
                 s1, s2 = cand.source_hospital, rec.source_hospital
                 same_hosp = same_hosp and (not s1 or not s2 or s1 == s2)
                 u1, u2 = url_key(cand.profile_url), key_u
                 c1, c2 = cand.get("city"), rec.get("city")
-                same_city = not c1 or not c2 or c1 == c2
-                # Same full name on one site = same doctor, even when the site has two pages for them
-                # (MOC '/our-team/x' and '/north-india/doctor/x'). Short names need matching URLs.
-                if same_hosp and (not u1 or not u2 or u1 == u2 or (len(key_n) >= 8 and same_city)):
+                # A link to the doctor's own off-site website is not a second profile on this site.
+                urls_ok = not u1 or not u2 or u1 == u2 or u1.split("/", 1)[0] != u2.split("/", 1)[0]
+                if is_exact:
+                    # Same full name on one site = same doctor, even on two pages of the site
+                    # (MOC '/our-team/x' and '/north-india/doctor/x'), when both cities are known and equal.
+                    ok = urls_ok or (len(key_n) >= 8 and c1 and c2 and c1 == c2)
+                else:
+                    # Only initials differ ('Ch. Mohana Vamsy' / 'Mohana Vamsy'): one side must have no initials,
+                    # so 'K. Srinivas Rao' and 'P. Srinivas Rao' stay two doctors.
+                    ok = urls_ok and (not has_initials(cand.get("name", "")) or not has_initials(rec.get("name", "")))
+                if same_hosp and ok:
                     target = cand
                     break
         if target is None:

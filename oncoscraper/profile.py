@@ -298,7 +298,10 @@ def _assign_block(rec: DoctorRecord, f: str, block: list[Line], head: Line, url:
 def _assign(rec: DoctorRecord, f: str, value: str, layer: str, snippet: str, url: str) -> None:
     value = value.strip()
     if f == "name":
-        n = find_name_in_text(value) or plain_person_name(value)
+        n = find_name_in_text(value)
+        if not n:
+            bare = re.sub(r"^\s*(?:dr|prof|doctor)\.?\s+", "", value, flags=re.I)
+            n = plain_person_name(bare) if clean_name(bare) == bare.strip(" .") else None
         if n and "name" not in rec.values:
             rec.set("name", n, layer, snippet, url)
         return
@@ -489,7 +492,7 @@ SPEC_JUNK = re.compile(
     r"\bhas\b|\bhave\b|\bwas\b|\bis\b|interest in|treated|patients|book|appointment|price|₹|rs\.", re.I)
 SPEC_WORD = re.compile(r"olog|surg|medicine|radiother|onco|cancer|transplant|bmt|imaging|patholog|anaesth|anesth|"
                        r"palliat|pain|haemat|hemat|pediatric|paediatric|nuclear|physician|care\b|tumou?r|neoplas|"
-                       r"leuk|lymph|sarcoma|carcinoma|myeloma|oncoplast", re.I)
+                       r"leuk|lymph|sarcoma|carcinoma|myeloma|oncoplast|therapy|\bpet\b|chemo|immuno", re.I)
 GENERIC_SPEC = {"cancer care / oncology", "cancer care", "oncology", "cancer treatment", "cancer"}
 TITLE_WORD = re.compile(
     r"\b(?:consultant|director|head|hod|chief|chair(?:man|person)?|professor|lecturer|resident|fellow|registrar|dean|"
@@ -520,6 +523,9 @@ def clean_specialty(value) -> str | None:
     parts = []
     for p in re.split(r"\s*[,;|]\s*", text):
         p = SPEC_PREFIX.sub("", p).strip(" .-–:")
+        # Trim certificate/membership tails instead of losing the speciality before them.
+        p = re.sub(r"\s*\([^)]*(?:certif|member|board|society|fellow|esmo|ecmo)[^)]*\)", "", p, flags=re.I)
+        p = re.split(r"\s+[-–]\s+(?=(?:member|certified|board|fellow))", p, maxsplit=1, flags=re.I)[0].strip(" .-–:")
         if not p or len(p.split()) > 8 or SPEC_JUNK.search(p) or not SPEC_WORD.search(p):
             continue
         parts.append(p)
@@ -533,8 +539,12 @@ def clean_designation(value) -> tuple[str | None, str | None]:
     """Returns (designation, specialty_if_the_value_was_really_a_specialty)."""
     v = str(value or "").strip(" .-–:,")
     # Stop at the hospital or place: '..., Rajiv Gandhi Cancer Institute', '... at Sri Balaji Action Medical'.
-    v = re.split(r"\s+at\s+|\s*,\s*(?=[^,]*\b(?:Hospitals?|Institute|Centre|Center|Healthcare|Clinic|Medical|AIIMS|"
-                 r"Medicity|University|College)\b)|\s*\(", v, maxsplit=1)[0].strip(" .-–:,&")
+    paren = re.search(r"\(([^)]{3,60})\)", v)
+    v = re.split(r"\s+at\s+|\s*,\s*(?=[^,]*\b(?:Hospitals?|Institute|Centre|Center|Healthcare|Clinic|Medical College|"
+                 r"AIIMS|Medicity|University|College)\b)|\s*\(", v, maxsplit=1)[0].strip(" .-–:,&")
+    if paren and SPEC_WORD.search(paren.group(1)) and TITLE_WORD.search(v):
+        return v, paren.group(1)  # 'Consultant (Medical Oncology)'
+
     if not v or "|" in v or re.search(r"\bDr\b\.?|https?://", v) or len(v) > 100:
         return None, None
     if not TITLE_WORD.search(v):
@@ -567,6 +577,9 @@ def clean_fields(rec: DoctorRecord) -> None:
         des, spec_from_des = clean_designation(rec.get("designation"))
         if des:
             rec.values["designation"] = des
+            if spec_from_des and not rec.get("specialty"):
+                rec.values["specialty"] = spec_from_des
+                rec.layers["specialty"] = "patterns"
         else:
             _drop(rec, "designation")
             if spec_from_des and not rec.get("specialty"):

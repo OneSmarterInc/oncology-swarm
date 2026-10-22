@@ -110,10 +110,7 @@ NAME_STOP = {
 # A "Dr. X ..." phrase that is an award, lecture, place or institution, not a person.
 NOT_A_PERSON = {
     "award", "awards", "medal", "oration", "lecture", "memorial", "prize", "fellowship", "scholarship", "trophy",
-    "excellence", "appreciation", "endowment", "chair", "society", "association", "college", "school", "road",
-    "marg", "nagar", "block", "hall", "auditorium", "ward", "wing", "foundation", "trust", "charitable", "campus",
-    "building", "bhawan", "bhavan", "chowk", "colony", "sector", "hospital", "hospitals", "institute", "centre",
-    "center", "university", "puraskar", "samman", "ratna", "shri", "shiromani", "vibhushan", "bhushan",
+    "excellence", "appreciation", "endowment", "puraskar", "samman", "foundation", "trust", "charitable",
 }
 _NAME_STOP_LOWER = {w.lower() for w in NAME_STOP}
 _QUALS_UPPER = {q.upper() for q in QUALIFICATIONS}
@@ -129,11 +126,12 @@ def clean_name(raw: str) -> str | None:
     # "Dr. Dr Md. Izhar Ali": drop honorifics repeated at the start.
     while tokens and tokens[0].strip(".,").lower() in {"dr", "prof", "professor", "doctor"}:
         tokens = tokens[1:]
-    if any(t.strip(".,()").lower() in NOT_A_PERSON for t in tokens):
-        return None
     out: list[str] = []
     for tok in tokens:
         bare = tok.strip(".,")
+        if bare.strip("()").lower() in NOT_A_PERSON:
+            return None  # 'Dr. APJ Abdul Kalam Excellence Award', 'Dr. JC Brash Memorial Prize'
+
         if bare.endswith("'s") and bare[:-2].lower() in _NAME_STOP_LOWER:
             break
         if bare in ("Md", "Mohd") and not out:  # Md. = Mohammed, not the MD degree
@@ -348,7 +346,7 @@ LISTING_URL_HINTS = re.compile(
 ONCO_URL_HINTS = re.compile(r"onco|cancer|tumou?r|radiation|radiotherapy|haemat|hemat|bmt|bone-marrow|chemo", re.I)
 SKIP_URL = re.compile(
     r"\.(?:pdf|jpe?g|png|gif|svg|webp|ico|css|js|mp4|mp3|zip|docx?|xlsx?|pptx?)(?:$|\?)|"
-    r"/(?:blogs?|news\w*|media|press\w*|articles?|doctor-?talks?|webinars?|podcasts?|events?|careers?|jobs|login|signin|sign-in|register|cart|checkout|"
+    r"/(?:blogs?|news|newspress|newsroom|news-?and-?media|in-the-news|media|press|press-releases?|articles?|doctor-?talks?|webinars?|podcasts?|events?|careers?|jobs|login|signin|sign-in|register|cart|checkout|"
     r"search|tag|tags|author|feed|wp-json|wp-admin|wp-content|cdn-cgi|share|print|amp|"
     r"health-packages?|packages?|health-check|lab-tests?|pharmacy|patient-stories|testimonials?|videos?|"
     r"gallery|investors?|csr|hi|mr|bn|ta|te|kn|gu|ml|book[-_]?an?[-_]?appointment|book[-_]appointment|appointments?|"

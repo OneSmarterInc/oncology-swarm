@@ -93,7 +93,7 @@ def test_same_doctor_on_two_pages_is_merged():
     m = Merger()
     a = _rec(name="Dr. Raman Narang", city="New Delhi")
     a.profile_url = a.source_url = "https://moc.example/our-team/dr-raman-narang"
-    b = _rec(name="Dr. Raman Narang")
+    b = _rec(name="Dr. Raman Narang", city="New Delhi")
     b.profile_url = b.source_url = "https://moc.example/north-india/doctor/dr-raman-narang"
     c = _rec(name="Dr. Ch. Mohana Vamsy")
     d = _rec(name="Dr. Mohana Vamsy")
@@ -120,3 +120,42 @@ def test_hospital_and_qualification_cleaning():
     r = _rec(qualifications=["MBBS", "Consultant - Orthopaedic Oncology", "DM (Medical Oncology)"])
     clean_fields(r)
     assert r.get("qualifications") == ["MBBS", "DM (Medical Oncology)"]
+
+
+def test_review_findings_real_names_and_merges():
+    for raw, want in [("Ratna Devi", "Ratna Devi"), ("Bharat Bhushan", "Bharat Bhushan"), ("K. Shri Ram", "K. Shri Ram"),
+                      ("Rajesh Nagar", "Rajesh Nagar"), ("Sudeep Gupta Tata Memorial Centre", "Sudeep Gupta"),
+                      ("Rajesh Sharma Hospital Director", "Rajesh Sharma"), ("Priya Rao Institute of Oncology", "Priya Rao")]:
+        assert clean_name(raw) == want, raw
+    m = Merger()
+    a, b = _rec(name="Dr. K. Srinivas Rao"), _rec(name="Dr. P. Srinivas Rao")
+    a.profile_url, b.profile_url = "https://h.example/d/101", "https://h.example/d/202"
+    c, d = _rec(name="Dr. Rajesh Kumar", city="Hisar"), _rec(name="Dr. Rajesh Kumar")
+    c.profile_url, d.profile_url = "https://h.example/d/1", "https://h.example/d/2"
+    for r in (a, b, c, d):
+        m.add(r)
+    assert len(m.records) == 4
+
+
+def test_review_findings_fields_and_veto():
+    assert clean_specialty("Radiation Oncology (Board Certified)") == "Radiation Oncology"
+    assert clean_specialty("Medical Oncology - Member ESMO") == "Medical Oncology"
+    assert clean_specialty("Immunotherapy") == "Immunotherapy"
+    from oncoscraper.profile import clean_designation
+    assert clean_designation("Chairman, Medical Oncology")[0] == "Chairman, Medical Oncology"
+    assert clean_designation("Consultant (Medical Oncology)") == ("Consultant", "Medical Oncology")
+    for title in ("Radiation Oncologist & Medical Physicist", "Chief Executive & Senior Consultant - Medical Oncology"):
+        r = _rec(designation=title)
+        score(r, "")
+        assert r.is_oncology, title
+    r = _rec(photo_url="https://h.example/img.php?id=7&region=south")
+    assert r.get("photo_url").endswith("id=7&region=south")
+
+
+def test_profile_with_related_doctors_strip_stays_a_profile():
+    cards = "".join(f'<div class="card"><h3><a href="/doctors/{i}">Dr. {n} Rao</a></h3><p>Medical Oncology</p></div>'
+                    for i, n in enumerate(["Anil", "Bina", "Chetan", "Deepa"], 100))
+    body = "<h1>Dr. Swathi K</h1><p>Consultant - Medical Oncology</p><p>MBBS, MD, DM</p><h2>Related doctors</h2>" + cards
+    pr = page("https://h.example/doctors/4567", body)
+    assert pr.page_type == "profile" and pr.doctors[0].get("name") == "Dr. Swathi K"
+    assert SKIP_URL.search("/doctor/newsha") is None
