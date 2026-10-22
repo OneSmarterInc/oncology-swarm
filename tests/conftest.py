@@ -82,3 +82,9 @@ def waf_url():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def _history_db(tmp_path, monkeypatch):
+    """Each test writes run history to its own temporary database."""
+    monkeypatch.setenv("ONCOSCRAPER_DB", str(tmp_path / "history.db"))

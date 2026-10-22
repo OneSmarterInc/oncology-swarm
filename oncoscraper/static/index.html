@@ -10,7 +10,7 @@
 body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
 header { background:#123a44; color:#fff; padding:22px 24px; }
 header h1 { margin:0; font-size:22px; } header p { margin:4px 0 0; color:#c8dde0; font-size:14px; }
-main { max-width:1280px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px; }
+.page { max-width:1280px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
 h2 { margin:0 0 12px; font-size:17px; }
 label { display:block; font-weight:600; font-size:13px; margin:0 0 4px; }
@@ -47,7 +47,17 @@ a { color:var(--accent); }
   button.secondary { background:transparent; } .pill { background:#1f3337; color:#9fd6d6; }
 }
 .grid { align-items:end; }
-main { grid-template-columns:minmax(0,1fr); } .card { min-width:0; }
+.bar-top { display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap; max-width:1280px; margin:0 auto; }
+nav { display:flex; gap:4px; flex-wrap:wrap; }
+nav a { color:#d6e8ea; text-decoration:none; padding:7px 12px; border-radius:7px; font-weight:600; font-size:14px; }
+nav a:hover { background:rgba(255,255,255,.1); } nav a.on { background:#fff; color:#123a44; }
+.cov { display:flex; height:10px; border-radius:5px; overflow:hidden; background:var(--line); min-width:80px; }
+.cov i { display:block; height:100%; } .cov .e { background:#1d7a3c; } .cov .p { background:#3f8fd6; } .cov .o { background:#9bb7bd; }
+.legend { font-size:12px; color:var(--muted); } .legend b { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 10px; vertical-align:-1px; }
+.actions button { padding:5px 10px; font-size:13px; margin:0 4px 4px 0; }
+.view[hidden] { display:none; }
+.row.checks { gap:22px; } .row.checks .check { margin-top:0; }
+.page { grid-template-columns:minmax(0,1fr); } .card { min-width:0; }
 .tablewrap table { min-width:720px; }
 .msg { margin:8px 0 0; font-size:13px; min-height:0; } .msg:empty { display:none; }
 .msg.bad { color:var(--bad); font-weight:600; } .msg.ok { color:var(--ok); } .msg.info { color:var(--muted); }
@@ -63,8 +73,61 @@ details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-to
 </style>
 </head>
 <body>
-<header><h1>OncoScraper</h1><p>Give a hospital website, find-a-doctor page, department page or a single doctor profile. Finds oncologists using rules only, no API key.</p></header>
+<header><div class="bar-top"><div><h1>OncoScraper</h1><p>Finds oncologists and their contacts on hospital websites, using rules only.</p></div>
+<nav id="nav"><a href="#dashboard">Dashboard</a><a href="#new">New run</a><a href="#runs">Runs</a><a href="#directory">Doctor directory</a></nav></div></header>
 <main>
+<div id="view-dashboard" class="page view" hidden>
+<section class="card">
+  <h2>Overview</h2>
+  <div class="stats" id="d-totals"></div>
+  <p class="hint">Counts every doctor once, using the newest copy from all runs.</p>
+</section>
+<section class="card">
+  <h2>Oncologists by hospital</h2>
+  <div class="tablewrap"><table><thead><tr><th>Hospital</th><th>Oncologists</th><th>With doctor email</th><th>With doctor phone</th><th>With any contact</th><th style="width:30%">Contact coverage</th></tr></thead>
+  <tbody id="d-hosp"></tbody></table></div>
+</section>
+<section class="card">
+  <h2>Recent runs</h2>
+  <div class="tablewrap"><table><thead><tr><th>Started</th><th>Run</th><th>Status</th><th>Oncologists</th></tr></thead><tbody id="d-runs"></tbody></table></div>
+</section>
+</div>
+
+<div id="view-runs" class="page view" hidden>
+<section class="card">
+  <h2>All runs</h2>
+  <p class="hint" style="margin-top:0">Every crawl and batch is kept here. A batch cut off when the app closed can be resumed; finished hospitals are not crawled again.</p>
+  <p class="msg" id="r-msg" role="status"></p>
+  <div class="tablewrap"><table><thead><tr><th>Started</th><th>Type</th><th>Run</th><th>Status</th><th>Duration</th><th>Oncologists</th><th>Actions</th></tr></thead><tbody id="r-rows"></tbody></table></div>
+</section>
+</div>
+
+<div id="view-directory" class="page view" hidden>
+<section class="card">
+  <h2>Doctor directory <span class="pill" id="x-count"></span></h2>
+  <div class="grid filters">
+    <div style="grid-column:span 2"><label for="x-q">Search</label><input id="x-q" placeholder="Name, email, qualification, anything"></div>
+    <div><label for="x-city">City</label><select id="x-city"><option value="">All cities</option></select></div>
+    <div><label for="x-hosp">Hospital</label><select id="x-hosp"><option value="">All hospitals</option></select></div>
+    <div><label for="x-spec">Specialty</label><input id="x-spec" placeholder="e.g. radiation"></div>
+  </div>
+  <div class="row checks">
+    <label class="check"><input type="checkbox" id="x-email"> Has doctor email</label>
+    <label class="check"><input type="checkbox" id="x-phone"> Has doctor phone</label>
+    <label class="check"><input type="checkbox" id="x-contact"> Has any contact</label>
+    <label class="check"><input type="checkbox" id="x-all"> Include non-oncologists</label>
+  </div>
+  <div class="row"><button type="button" id="x-xlsx">Export Excel</button><button type="button" class="secondary" id="x-csv">CSV</button>
+    <button type="button" class="secondary" id="x-reset">Clear filters</button><span class="hint">Exports use the filters above.</span></div>
+  <p class="msg" id="x-msg" role="status"></p>
+  <div class="tablewrap" style="margin-top:10px"><table>
+    <thead><tr><th>Name</th><th>Specialty</th><th>Designation</th><th>Doctor phone</th><th>Doctor email</th><th>Hospital / desk contact</th><th>Hospital</th><th>City</th><th>Qualifications</th><th>Source</th></tr></thead>
+    <tbody id="x-rows"></tbody></table></div>
+  <div class="row"><button type="button" class="secondary" id="x-prev">Previous</button><span class="hint" id="x-page"></span><button type="button" class="secondary" id="x-next">Next</button></div>
+</section>
+</div>
+
+<div id="view-new" class="page view">
 <section class="card">
   <h2>Crawl a hospital list (Excel)</h2>
   <p class="hint" style="margin-top:0">One row per hospital in the standard template. The crawler stays on the websites in your file; there is no separate allow-list to edit.</p>
@@ -154,7 +217,9 @@ details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-to
   <div class="summary" id="page-sum" hidden></div>
   <details id="page-raw" hidden><summary>Show raw data</summary><pre class="json" id="page-out"></pre></details>
 </section>
+</div>
 </main>
 <script src="/static/app.js"></script>
+<script src="/static/portal.js"></script>
 </body>
 </html>

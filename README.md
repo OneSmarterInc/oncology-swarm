@@ -45,6 +45,17 @@ Expect `11 oncologists`. Open `demo.xlsx`.
 
 Open http://127.0.0.1:8000/, paste a URL, click **Start crawl**, watch progress, then **Download Excel**. Use **Test one page** first to see what the extractor reads from a single URL.
 
+### Portal pages
+
+| Page | What it shows |
+|---|---|
+| Dashboard | Oncologists, hospitals and contact coverage across all runs; per-hospital table (click a hospital to open it in the directory); recent runs. |
+| New run | Upload a hospital list (batch) or crawl one website; progress, pause/resume/stop, downloads. |
+| Runs | Every past run with status and oncologists saved. Download its Excel, Run again (one website), Resume (a batch cut off when the app closed: finished hospitals are not crawled again), Delete. |
+| Doctor directory | All oncologists found so far, each doctor once (newest copy). Search, filter by city, hospital, specialty, has email / phone / any contact; export Excel or CSV of the filtered list. |
+
+History is saved in `results\oncoscraper.db` (one SQLite file). Copy that file to back it up; delete it to start fresh.
+
 ### Web UI features
 
 | Feature | How |

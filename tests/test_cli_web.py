@@ -272,3 +272,47 @@ def test_ui_helpers_and_friendly_errors(site_url, tmp_path, monkeypatch, capsys)
     p.write_text("foo,bar\n1,2\n")
     assert main(["batch", str(p), "--out", str(tmp_path / "o.xlsx")]) == 2
     assert "Cannot read" in capsys.readouterr().out
+
+
+def test_portal_history_directory_dashboard_and_resume(site_url, tmp_path, monkeypatch):
+    import base64
+    from oncoscraper.sources import write_template
+    monkeypatch.setattr(web, "OUT_DIR", tmp_path)
+    monkeypatch.setenv("ONCOSCRAPER_ALLOW_PRIVATE", "1")
+    monkeypatch.delenv("ONCOSCRAPER_DB", raising=False)
+    web._STORE = None
+    client = TestClient(web.app)
+    path = write_template(tmp_path / "p.xlsx", [
+        {"hospital_name": "Sunrise A", "oncology_page_urls": f"{site_url}/specialities/cancer-care"},
+        {"hospital_name": "Sunrise B", "oncology_page_urls": f"{site_url}/faculty/radiation-oncology"}])
+    payload = {"filename": "p.xlsx", "content_base64": base64.b64encode(path.read_bytes()).decode(),
+               "pages_per_site": 4, "delay_seconds": 0, "render": "never", "use_sitemaps": False}
+    bid = client.post("/api/batch", json=payload).json()["id"]
+    _wait(client, f"/api/batch/{bid}", lambda s: s["state"] == "done", tries=300)
+    runs = client.get("/api/runs").json()["runs"]
+    assert runs[0]["id"] == bid and runs[0]["state"] == "done" and runs[0]["oncologists_saved"] > 0
+    assert len(client.get(f"/api/runs/{bid}").json()["sites"]) == 2
+    d = client.get("/api/directory").json()
+    assert d["total"] > 0 and "Sunrise A" in d["facets"]["hospitals"]
+    only_a = client.get("/api/directory", params={"hospital": "Sunrise A"}).json()
+    assert 0 < only_a["total"] < d["total"] + 1 and all(x["source_hospital"] == "Sunrise A" for x in only_a["doctors"])
+    assert client.get("/api/directory", params={"has_email": "true"}).json()["total"] <= d["total"]
+    assert client.get("/api/directory", params={"q": "zzzz-nothing"}).json()["total"] == 0
+    dash = client.get("/api/dashboard").json()
+    assert dash["totals"]["oncologists"] == d["total"] and dash["hospitals"]
+    assert client.get("/api/directory/download.xlsx").content[:2] == b"PK"
+    assert "Sunrise" in client.get("/api/directory/download.csv").text
+    assert client.get(f"/api/runs/{bid}/download.xlsx").content[:2] == b"PK"
+    # app restart while a batch was going: it shows as interrupted and can be resumed
+    web.store().update_run(bid, state="running")
+    web.BATCHES.pop(bid)
+    web._STORE = None
+    assert client.get(f"/api/runs/{bid}").json()["state"] == "interrupted"
+    r = client.post(f"/api/runs/{bid}/resume").json()
+    assert r["id"] == bid
+    st = _wait(client, f"/api/batch/{bid}", lambda s: s["state"] == "done", tries=300)
+    assert {s["status"] for s in st["sites"]} == {"resumed"}  # finished hospitals were not crawled again
+    # delete
+    assert client.delete(f"/api/runs/{bid}").json()["ok"]
+    assert all(x["id"] != bid for x in client.get("/api/runs").json()["runs"])
+    web._STORE = None
