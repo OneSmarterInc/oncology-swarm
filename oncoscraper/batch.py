@@ -75,14 +75,16 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
             c = DoctorRecord.from_full_dict(d.to_full_dict())
             c.source_hospital = src.hospital
             merger.add(c)
-        onco = [d for d in crawler.merger.records if d.is_oncology]
+    demote_shared(merger.records)
+    if crawler is not None and src is not None:  # counted after shared desk numbers are moved
+        mine = [d for d in merger.records if d.source_hospital == src.hospital]
+        onco = [d for d in mine if d.is_oncology]
         summary.append({"row": src.row, "hospital": src.hospital, "status": "in progress",
-                        "pages": "", "doctors": len(crawler.merger.records), "oncologists": len(onco),
+                        "pages": "", "doctors": len(mine), "oncologists": len(onco),
                         "with_phone": sum(1 for d in onco if d.get("phone")),
                         "with_email": sum(1 for d in onco if d.get("email")),
                         "with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
                         "start_urls": " ".join(src.urls), "note": "partial: crawl still running"})
-    demote_shared(merger.records)
     sources = live.get("sources") or []
     result = CrawlResult([u for s in sources for u in s.urls], merger.records, pages)
     onco = result.oncologists
