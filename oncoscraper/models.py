@@ -1,6 +1,8 @@
 """Data shapes shared by the fetcher, extractor, crawler and exporters."""
 from __future__ import annotations
 
+import html
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,12 +70,13 @@ class DoctorRecord:
         if value is None:
             return False
         if isinstance(value, str):
-            value = " ".join(value.split()).strip(" ,;:|-")
+            value = " ".join(html.unescape(html.unescape(value)).split()).strip(" ,;:|-")  # '&amp;#038;' -> '&'
             if not value:
                 return False
         src = source_url or self.source_url
         if name in LIST_FIELDS:
             items = value if isinstance(value, (list, tuple)) else [value]
+            items = [html.unescape(i) if isinstance(i, str) else i for i in items]
             current = list(self.values.get(name, []))
             seen = {i.casefold() for i in current}
             changed = False

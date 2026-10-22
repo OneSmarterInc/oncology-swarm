@@ -158,10 +158,22 @@ def walk_json(data: Any, limit: int = 300_000) -> Iterator[dict]:
             stack.extend(item)
 
 
+NOT_PERSON_TYPES = {
+    "videoobject", "article", "newsarticle", "blogposting", "webpage", "webpageelement", "event", "review", "rating",
+    "aggregaterating", "imageobject", "mediaobject", "faqpage", "question", "answer", "howto", "creativework",
+    "socialmediaposting", "medicalwebpage", "collectionpage", "itemlist", "breadcrumblist", "organization",
+    "hospital", "medicalorganization", "medicalclinic", "localbusiness", "product", "offer", "service", "course",
+}
+
+
 def doctors_in_json(data: Any, layer: str, min_score: int = 3) -> list[Candidate]:
     out: list[Candidate] = []
     seen: set[str] = set()
     for obj in walk_json(data):
+        t = obj.get("@type") if isinstance(obj, dict) else None
+        t = {str(x).rsplit("/", 1)[-1].lower() for x in ([t] if isinstance(t, str) else (t or [])) if isinstance(x, str)}
+        if t & NOT_PERSON_TYPES:
+            continue  # a video, article or event that names a doctor is not the doctor
         score, mapped, url = _doctorish(obj)
         if score < min_score:
             continue

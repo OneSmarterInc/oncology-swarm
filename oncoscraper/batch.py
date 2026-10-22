@@ -75,6 +75,8 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
         demote_sitewide(current, {k: set(v) for k, v in list(crawler.value_pages.items())})
         for c in current:
             c.source_hospital = src.hospital
+            if not c.get("hospital"):
+                c.set("hospital", src.hospital, "hospital list", "Hospital Name column of the uploaded list", c.source_url)
             merger.add(c)
     demote_shared(merger.records)
     if crawler is not None and src is not None:  # counted after shared desk numbers are moved
@@ -154,6 +156,8 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
         docs = [DoctorRecord.from_full_dict(d) for d in data["doctors"]]
         for d in docs:
             d.source_hospital = src.hospital
+            if not d.get("hospital"):  # the name from the hospital list beats an empty cell
+                d.set("hospital", src.hospital, "hospital list", "Hospital Name column of the uploaded list", d.source_url)
             merger.add(d)
         pages.extend(PageLog(**p) for p in data["pages"])
         if live is not None:

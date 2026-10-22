@@ -18,7 +18,9 @@ from .contacts import demote_shared, demote_sitewide
 from .dom import same_site
 from .extract import extract_page
 from .fetch import Fetcher, normalize_url
+from . import oncology
 from .models import DoctorRecord, PageResult
+from .profile import clean_fields
 from .vocab import LINK_TEXT_HINTS, LISTING_URL_HINTS, ONCO_URL_HINTS, PAGINATION_RE, PROFILE_URL_HINTS, SKIP_URL
 
 log = logging.getLogger(__name__)
@@ -29,6 +31,14 @@ def name_key(name: str) -> str:
     n = re.sub(r"\((?:dr|prof|col|brig|maj|lt|gen)[^)]*\)\s*", "", n)
     n = re.sub(r"\b(?:brig|col|lt|maj|gen|capt)\.?\s+", "", n)
     return re.sub(r"[^a-z]", "", n)
+
+
+def loose_key(name: str) -> str | None:
+    """Name without initials: 'Dr. Ch. Mohana Vamsy' and 'Dr. Mohana Vamsy' -> 'mohanavamsy'.
+    Needs two full words left, so 'Dr. A. Kumar' and 'Dr. B. Kumar' never meet."""
+    n = re.sub(r"^(?:dr|prof|professor|doctor)\.?\s+", "", (name or "").lower())
+    words = [w for w in re.split(r"[\s.]+", n) if len(re.sub(r"[^a-z]", "", w)) > 2]
+    return "".join(re.sub(r"[^a-z]", "", w) for w in words) if len(words) >= 2 else None
 
 
 def url_key(url: str | None) -> str | None:
@@ -46,17 +56,24 @@ class Merger:
         self.records: list[DoctorRecord] = []
         self._by_url: dict[str, DoctorRecord] = {}
         self._by_name: dict[str, list[DoctorRecord]] = {}
+        self._by_loose: dict[str, list[DoctorRecord]] = {}
 
     def add(self, rec: DoctorRecord) -> DoctorRecord:
         key_u = url_key(rec.profile_url)
         key_n = name_key(rec.get("name", ""))
         target = self._by_url.get(key_u) if key_u else None
         if target is None and key_n:
-            for cand in self._by_name.get(key_n, []):
+            for cand in self._by_name.get(key_n, []) + self._by_loose.get(loose_key(rec.get("name", "")), []):
                 h1, h2 = (cand.get("hospital") or "").lower(), (rec.get("hospital") or "").lower()
                 same_hosp = not h1 or not h2 or h1[:12] == h2[:12] or h1 in h2 or h2 in h1
+                s1, s2 = cand.source_hospital, rec.source_hospital
+                same_hosp = same_hosp and (not s1 or not s2 or s1 == s2)
                 u1, u2 = url_key(cand.profile_url), key_u
-                if same_hosp and (not u1 or not u2 or u1 == u2):
+                c1, c2 = cand.get("city"), rec.get("city")
+                same_city = not c1 or not c2 or c1 == c2
+                # Same full name on one site = same doctor, even when the site has two pages for them
+                # (MOC '/our-team/x' and '/north-india/doctor/x'). Short names need matching URLs.
+                if same_hosp and (not u1 or not u2 or u1 == u2 or (len(key_n) >= 8 and same_city)):
                     target = cand
                     break
         if target is None:
@@ -79,6 +96,11 @@ class Merger:
             self._by_url[k] = target
         if key_n:
             bucket = self._by_name.setdefault(key_n, [])
+            if target not in bucket:
+                bucket.append(target)
+        lk = loose_key(rec.get("name", ""))
+        if lk:
+            bucket = self._by_loose.setdefault(lk, [])
             if target not in bucket:
                 bucket.append(target)
         return target
@@ -270,6 +292,9 @@ class Crawler:
         finally:
             self.fetcher.close()
         result.doctors = self.merger.records
+        for d in result.doctors:  # merged records: check the final title once more
+            clean_fields(d)
+            oncology.veto(d)
         demote_sitewide(result.doctors, self.value_pages)
         demote_shared(result.doctors)
         result.stats = {

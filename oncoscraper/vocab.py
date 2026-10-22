@@ -107,20 +107,45 @@ NAME_STOP = {
 }
 
 
+# A "Dr. X ..." phrase that is an award, lecture, place or institution, not a person.
+NOT_A_PERSON = {
+    "award", "awards", "medal", "oration", "lecture", "memorial", "prize", "fellowship", "scholarship", "trophy",
+    "excellence", "appreciation", "endowment", "chair", "society", "association", "college", "school", "road",
+    "marg", "nagar", "block", "hall", "auditorium", "ward", "wing", "foundation", "trust", "charitable", "campus",
+    "building", "bhawan", "bhavan", "chowk", "colony", "sector", "hospital", "hospitals", "institute", "centre",
+    "center", "university", "puraskar", "samman", "ratna", "shri", "shiromani", "vibhushan", "bhushan",
+}
+_NAME_STOP_LOWER = {w.lower() for w in NAME_STOP}
+_QUALS_UPPER = {q.upper() for q in QUALIFICATIONS}
+# A word that is a speciality or job, even when misspelt or glued after the name ("Sravya B Medicial").
+_ROLE_WORD = re.compile(r"(?:olog(?:y|ist|ical)|ic(?:i)?al|ician|iatrist|apist|ologists)$", re.I)
+
+
 def clean_name(raw: str) -> str | None:
     """Trim trailing non-name words and validate a captured name."""
     tokens = raw.replace("’", "'").split()
     if tokens and all(t.isupper() or len(t.strip(".")) <= 1 for t in tokens):
         tokens = [t if len(t.strip(".")) <= 1 or "." in t.strip(".") else t.capitalize() for t in tokens]
+    # "Dr. Dr Md. Izhar Ali": drop honorifics repeated at the start.
+    while tokens and tokens[0].strip(".,").lower() in {"dr", "prof", "professor", "doctor"}:
+        tokens = tokens[1:]
+    if any(t.strip(".,()").lower() in NOT_A_PERSON for t in tokens):
+        return None
     out: list[str] = []
     for tok in tokens:
         bare = tok.strip(".,")
-        if bare.endswith("'s") and bare[:-2] in NAME_STOP:
+        if bare.endswith("'s") and bare[:-2].lower() in _NAME_STOP_LOWER:
             break
-        if bare in NAME_STOP or bare.upper() in {q.upper() for q in QUALIFICATIONS}:
+        if bare in ("Md", "Mohd") and not out:  # Md. = Mohammed, not the MD degree
+            out.append(tok)
+            continue
+        if bare.lower() in _NAME_STOP_LOWER or bare.upper() in _QUALS_UPPER:
+            break
+        if len(bare) > 4 and _ROLE_WORD.search(bare) and out:
             break
         out.append(tok.rstrip(","))
-    while out and len(out[-1].strip(".")) <= 1 and len(out) > 1 and not out[-1].endswith("."):
+    # Drop stray lower-case single letters at the end; keep real initials ("Dr. Rahul D L").
+    while out and len(out) > 1 and len(out[-1].strip(".")) <= 1 and not out[-1].strip(".").isupper():
         out.pop()
     name = " ".join(out).strip(" .,-")
     letters = [t for t in out if len(t.strip(".")) > 1]
@@ -147,6 +172,7 @@ DESIGNATION_RE = re.compile(
     r"Chairman|Chairperson|Head of (?:the )?Department|HOD|Unit Head|Head|Chief(?: of [A-Za-z ]+)?|Clinical (?:Lead|Director)|"
     r"(?:Senior|Associate|Attending|Junior|Visiting|Principal|Sr\.?)\s+Consultant|Consultant|"
     r"(?:Associate|Assistant|Additional)\s+Professor|Professor|Senior Resident|Medical Director|Dean|Lecturer)\b"
+    r"(?:\s+(?!(?:at|in|of|and|with|Dr|Prof)\b)[A-Z][A-Za-z\-]+){0,4}"  # 'Chief Dietician', 'Consultant Medical Oncologist'
     r"(?:\s*(?:[-–&,:]|and|of|in|&)\s*[A-Za-z&,\-–() /]{2,90})?",
     re.I,
 )
@@ -186,6 +212,28 @@ OPD_RE = re.compile(
     re.I,
 )
 
+# Hospital localities that name a part of a city ("Omega Hospitals Gachibowli", "Pusa Road, Karol Bagh").
+LOCALITY_CITY = {
+    "Karol Bagh": "New Delhi", "Pusa Road": "New Delhi", "Paschim Vihar": "New Delhi", "Vasant Kunj": "New Delhi",
+    "Lajpat Nagar": "New Delhi", "Okhla": "New Delhi", "Sarita Vihar": "New Delhi", "Pitampura": "New Delhi",
+    "Rohini": "New Delhi", "Janakpuri": "New Delhi", "Greater Kailash": "New Delhi", "Mayur Vihar": "New Delhi",
+    "Punjabi Bagh": "New Delhi", "Moti Nagar": "New Delhi", "Ansari Nagar": "New Delhi", "Niti Bagh": "New Delhi",
+    "Gachibowli": "Hyderabad", "Banjara Hills": "Hyderabad", "Jubilee Hills": "Hyderabad", "Somajiguda": "Hyderabad",
+    "Kondapur": "Hyderabad", "Madhapur": "Hyderabad", "Hitech City": "Hyderabad", "Begumpet": "Hyderabad",
+    "LB Nagar": "Hyderabad", "Nampally": "Hyderabad", "Kukatpally": "Hyderabad", "Malakpet": "Hyderabad",
+    "Andheri": "Mumbai", "Borivali": "Mumbai", "Chembur": "Mumbai", "Mahim": "Mumbai", "Malad": "Mumbai",
+    "Kemps Corner": "Mumbai", "Mulund": "Mumbai", "Ghatkopar": "Mumbai", "Vile Parle": "Mumbai", "Parel": "Mumbai",
+    "Powai": "Mumbai", "Goregaon": "Mumbai", "Bandra": "Mumbai", "Worli": "Mumbai", "Byculla": "Mumbai",
+    "Vashi": "Navi Mumbai", "Kharghar": "Navi Mumbai", "Panvel": "Navi Mumbai", "Kalyan": "Thane",
+    "Whitefield": "Bengaluru", "Jayanagar": "Bengaluru", "Koramangala": "Bengaluru", "Hebbal": "Bengaluru",
+    "Yeshwanthpur": "Bengaluru", "Electronic City": "Bengaluru", "Marathahalli": "Bengaluru", "Malleshwaram": "Bengaluru",
+    "Adyar": "Chennai", "Greams Road": "Chennai", "Vadapalani": "Chennai", "Perungudi": "Chennai", "Mylapore": "Chennai",
+    "Salt Lake": "Kolkata", "Dhakuria": "Kolkata", "Mukundapur": "Kolkata", "Rajarhat": "Kolkata", "New Town": "Kolkata",
+    "Kalyani Nagar": "Pune", "Shivaji Nagar": "Pune", "Swargate": "Pune", "Baner": "Pune", "Pimpri Chinchwad": "Pune",
+    "Navrangpura": "Ahmedabad", "Maninagar": "Ahmedabad", "Bopal": "Ahmedabad", "Nikol": "Ahmedabad",
+    "Vesu": "Surat", "Kanuru": "Vijayawada",
+}
+
 INDIAN_CITIES = [
     "New Delhi", "Delhi", "Gurugram", "Gurgaon", "Noida", "Greater Noida", "Ghaziabad", "Faridabad", "Mumbai",
     "Navi Mumbai", "Thane", "Pune", "Nagpur", "Nashik", "Aurangabad", "Bengaluru", "Bangalore", "Mysuru",
@@ -200,14 +248,14 @@ INDIAN_CITIES = [
     "Trivandrum", "Kozhikode", "Calicut", "Thrissur", "Kollam", "Kannur", "Guwahati", "Shillong", "Imphal",
     "Agartala", "Goa", "Panaji", "Margao", "Puducherry", "Pondicherry", "Karnal", "Panipat", "Sonipat",
     "Hisar", "Rohtak", "Ambala", "Saket", "Vaishali", "Patparganj", "Shalimar Bagh", "Dwarka", "Rajinder Nagar",
-]
+] + list(LOCALITY_CITY)
 CITY_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, INDIAN_CITIES), key=len, reverse=True)) + r")\b")
 CITY_CANON = {"Gurgaon": "Gurugram", "Bangalore": "Bengaluru", "Bombay": "Mumbai", "Calcutta": "Kolkata",
               "Madras": "Chennai", "Cochin": "Kochi", "Trivandrum": "Thiruvananthapuram", "Mysore": "Mysuru",
               "Mangalore": "Mangaluru", "Calicut": "Kozhikode", "Allahabad": "Prayagraj", "Vizag": "Visakhapatnam",
               "Pondicherry": "Puducherry", "Trichy": "Tiruchirappalli",
               "Saket": "New Delhi", "Vaishali": "Ghaziabad", "Patparganj": "New Delhi", "Shalimar Bagh": "New Delhi",
-              "Dwarka": "New Delhi", "Rajinder Nagar": "New Delhi"}
+              "Dwarka": "New Delhi", "Rajinder Nagar": "New Delhi", **LOCALITY_CITY}
 
 HOSPITAL_WORDS = re.compile(
     r"\b(?:Hospital|Hospitals|Healthcare|Health City|Medical (?:College|Centre|Center|Institute)|Institute|"
@@ -300,7 +348,7 @@ LISTING_URL_HINTS = re.compile(
 ONCO_URL_HINTS = re.compile(r"onco|cancer|tumou?r|radiation|radiotherapy|haemat|hemat|bmt|bone-marrow|chemo", re.I)
 SKIP_URL = re.compile(
     r"\.(?:pdf|jpe?g|png|gif|svg|webp|ico|css|js|mp4|mp3|zip|docx?|xlsx?|pptx?)(?:$|\?)|"
-    r"/(?:blogs?|news|media|press|events?|careers?|jobs|login|signin|sign-in|register|cart|checkout|"
+    r"/(?:blogs?|news\w*|media|press\w*|articles?|doctor-?talks?|webinars?|podcasts?|events?|careers?|jobs|login|signin|sign-in|register|cart|checkout|"
     r"search|tag|tags|author|feed|wp-json|wp-admin|wp-content|cdn-cgi|share|print|amp|"
     r"health-packages?|packages?|health-check|lab-tests?|pharmacy|patient-stories|testimonials?|videos?|"
     r"gallery|investors?|csr|hi|mr|bn|ta|te|kn|gu|ml|book[-_]?an?[-_]?appointment|book[-_]appointment|appointments?|"

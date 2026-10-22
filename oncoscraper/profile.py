@@ -72,12 +72,17 @@ def split_designation(text: str) -> tuple[str | None, str | None]:
     if not m:
         return None, None
     full = m.group(0).strip(" -–,:")
+    # Stop at the hospital: 'Director in Radiology at Action Cancer Hospital, Paschim Vihar'.
+    full = re.split(r"\s+at\s+|\s*,\s*(?=[^,]*\b(?:Hospitals?|Institute|Centre|Center|Healthcare|Clinic|"
+                    r"Medical College|AIIMS|Medicity)\b)", full, maxsplit=1)[0].strip(" -–,:")
     q = QUAL_RE.search(normalize_quals(full))
     if q and q.start() > 3:
         full = full[: q.start()].strip(" -–,:")
     parts = re.split(r"\s*(?:[-–:,|]|\bof\b|\bin\b)\s*", full, maxsplit=1)
     role = parts[0].strip()
     rest = parts[1].strip(" -–,") if len(parts) > 1 else None
+    if rest:
+        rest = re.sub(r"^(?:the\s+)?(?:department|dept\.?|division|unit)\s+(?:of\s+)?", "", rest, flags=re.I).strip() or None
     if rest and len(rest) < 3:
         rest = None
     return full if len(full) <= 120 else role, rest
@@ -292,6 +297,11 @@ def _assign_block(rec: DoctorRecord, f: str, block: list[Line], head: Line, url:
 
 def _assign(rec: DoctorRecord, f: str, value: str, layer: str, snippet: str, url: str) -> None:
     value = value.strip()
+    if f == "name":
+        n = find_name_in_text(value) or plain_person_name(value)
+        if n and "name" not in rec.values:
+            rec.set("name", n, layer, snippet, url)
+        return
     if f == "experience_years":
         v = parse_experience(value) or parse_experience(value + " years experience")
         if v:
@@ -469,8 +479,128 @@ def patterns(rec: DoctorRecord, lines: list[Line], name_idx: int, main: Tag, url
             rec.set("qualifications", parse_qualifications(desc), "meta", desc, url)
 
 
+# --------------------------------------------------------------------------
+# Value checks. Each field must look like what it is; anything else is dropped,
+# so a wrong value never reaches the Excel file.
+SPEC_PREFIX = re.compile(r"^\s*(?:speciali[sz]ation|speciality|specialty|specialities|department|dept\.?|division)\s*[-:–]+\s*", re.I)
+SPEC_JUNK = re.compile(
+    r"award|finalist|winner|society|certific|certified|member|fellowship|board|association|journal|conference|"
+    r"course|training|observership|\bno\.?\s*\d|\b(?:19|20)\d\d\b|^how\b|^what\b|^why\b|\?|esmo|ecmo|"
+    r"\bhas\b|\bhave\b|\bwas\b|\bis\b|interest in|treated|patients|book|appointment|price|₹|rs\.", re.I)
+SPEC_WORD = re.compile(r"olog|surg|medicine|radiother|onco|cancer|transplant|bmt|imaging|patholog|anaesth|anesth|"
+                       r"palliat|pain|haemat|hemat|pediatric|paediatric|nuclear|physician|care\b|tumou?r|neoplas|"
+                       r"leuk|lymph|sarcoma|carcinoma|myeloma|oncoplast", re.I)
+GENERIC_SPEC = {"cancer care / oncology", "cancer care", "oncology", "cancer treatment", "cancer"}
+TITLE_WORD = re.compile(
+    r"\b(?:consultant|director|head|hod|chief|chair(?:man|person)?|professor|lecturer|resident|fellow|registrar|dean|"
+    r"founder|lead|in-?charge|specialist|surgeon|physician|attending|oncologist|radiologist|pathologist|officer|"
+    r"superintendent|coordinator|scientist|physicist|dietician|dietitian|nutritionist|psychologist|counsell?or|"
+    r"therapist|anaesthetist|anesthetist|intensivist|haematologist|hematologist|doctor|medical officer|incharge|"
+    r"principal|vice|associate|assistant|senior|junior|visiting|honorary|emeritus|trustee|president|secretary)\b", re.I)
+DAY_OR_TIME = re.compile(r"\b(?:mon|tue|wed|thu|fri|sat|sun|daily|weekdays?|all days)|\d\s*(?:am|pm|a\.m|p\.m|hrs)\b|"
+                         r"\d{1,2}[:.]\d{2}|by appointment|on call", re.I)
+COUNCIL_RE = re.compile(r"\b(MCI|NMC|DMC|MMC|KMC|TNMC|WBMC|UPMC|GMC|APMC|TSMC|RMC|PMC|HMC|BMC|OMC|KSMC|MPMC|CGMC|"
+                        r"Delhi Medical Council|Maharashtra Medical Council|Karnataka Medical Council)\b", re.I)
+
+
+def clean_registration(value: str, context: str = "") -> str | None:
+    """'MCI/24762 date' -> 'MCI/24762'; 'MMC 00517' kept with its council; fragments dropped."""
+    v = re.sub(r"\s+(?:dated?|dt\.?|year|valid|since|issued).*$", "", str(value), flags=re.I).strip(" /-:.#")
+    if len(re.sub(r"\D", "", v)) < 3:
+        return None
+    council = COUNCIL_RE.search(context or "")
+    if council and not COUNCIL_RE.search(v):
+        sep = "/" if re.search(re.escape(council.group(1)) + r"\s*/", context, re.I) else " "
+        v = f"{council.group(1).upper() if len(council.group(1)) <= 5 else council.group(1)}{sep}{v}"
+    return v[:40]
+
+
+def clean_specialty(value) -> str | None:
+    text = ", ".join(value) if isinstance(value, list) else str(value or "")
+    parts = []
+    for p in re.split(r"\s*[,;|]\s*", text):
+        p = SPEC_PREFIX.sub("", p).strip(" .-–:")
+        if not p or len(p.split()) > 8 or SPEC_JUNK.search(p) or not SPEC_WORD.search(p):
+            continue
+        parts.append(p)
+    specific = [p for p in parts if p.lower() not in GENERIC_SPEC]
+    parts = specific or parts[:1]
+    parts = [p for p in parts if not any(p != q and p.lower() in q.lower() for q in parts)]
+    return ", ".join(dict.fromkeys(parts))[:200] or None
+
+
+def clean_designation(value) -> tuple[str | None, str | None]:
+    """Returns (designation, specialty_if_the_value_was_really_a_specialty)."""
+    v = str(value or "").strip(" .-–:,")
+    # Stop at the hospital or place: '..., Rajiv Gandhi Cancer Institute', '... at Sri Balaji Action Medical'.
+    v = re.split(r"\s+at\s+|\s*,\s*(?=[^,]*\b(?:Hospitals?|Institute|Centre|Center|Healthcare|Clinic|Medical|AIIMS|"
+                 r"Medicity|University|College)\b)|\s*\(", v, maxsplit=1)[0].strip(" .-–:,&")
+    if not v or "|" in v or re.search(r"\bDr\b\.?|https?://", v) or len(v) > 100:
+        return None, None
+    if not TITLE_WORD.search(v):
+        return None, (v if SPEC_WORD.search(v) else None)
+    return v, None
+
+
+def _drop(rec: DoctorRecord, f: str) -> None:
+    rec.values.pop(f, None)
+    rec.layers.pop(f, None)
+
+
+HOSPITAL_BAD = re.compile(r"https?://|www\.|\b\d+\+?\s*(?:years?|yrs?)\b|^\s*\d|^(?:explore|discover|welcome|best|top|"
+                          r"book|call|click|find|search|view|know)\b", re.I)
+
+
+def clean_fields(rec: DoctorRecord) -> None:
+    hosp = rec.get("hospital")
+    if hosp and (HOSPITAL_BAD.search(str(hosp)) or len(str(hosp).split()) > 14):
+        _drop(rec, "hospital")  # '20+ years', a URL, or a page slogan is not a hospital name
+    quals = rec.get("qualifications")
+    if quals:
+        keep = [q for q in (quals if isinstance(quals, list) else [quals])
+                if QUAL_RE.match(normalize_quals(str(q)).strip()) or not TITLE_WORD.search(str(q))]
+        if keep:
+            rec.values["qualifications"] = keep
+        else:
+            _drop(rec, "qualifications")
+    if rec.get("designation"):
+        des, spec_from_des = clean_designation(rec.get("designation"))
+        if des:
+            rec.values["designation"] = des
+        else:
+            _drop(rec, "designation")
+            if spec_from_des and not rec.get("specialty"):
+                rec.values["specialty"] = spec_from_des
+                rec.layers["specialty"] = "patterns"
+    if rec.get("specialty"):
+        spec = clean_specialty(rec.get("specialty"))
+        if spec:
+            rec.values["specialty"] = spec
+        else:
+            _drop(rec, "specialty")
+    dept = rec.get("department")
+    if dept and (str(dept).strip().lower() in {"home", "doctors", "our doctors", "find a doctor", "team"}
+                 or not SPEC_WORD.search(str(dept))):
+        _drop(rec, "department")
+    opd = rec.get("opd_timings")
+    if opd:
+        items = [o for o in (opd if isinstance(opd, list) else [opd]) if DAY_OR_TIME.search(str(o))]
+        if items:
+            rec.values["opd_timings"] = items
+        else:
+            _drop(rec, "opd_timings")
+    if rec.get("registration"):
+        ev = next((e.snippet for e in rec.evidence if e.field == "registration"), "")
+        reg = clean_registration(rec.get("registration"), ev)
+        if reg:
+            rec.values["registration"] = reg
+        else:
+            _drop(rec, "registration")
+
+
 def finalize(rec: DoctorRecord, breadcrumbs: list[str], url: str) -> None:
     """Derive sub-specialties and clean up obvious noise."""
+    clean_fields(rec)
     spec = rec.get("specialty")
     if isinstance(spec, list):
         spec = ", ".join(spec)

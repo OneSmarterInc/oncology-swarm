@@ -138,6 +138,15 @@ def extract_page(page: Page) -> PageResult:
         and len(card_recs) <= 1 and len(table_recs) < 2
     )
     profile_evidence = strong or weak
+    # A page listing three or more other doctors with links is a listing, even if one name sits in the h1
+    # (AOI '/our-doctors/clinical-oncologists' put the first doctor's name in a heading).
+    linked_cards = {normalize_url(urljoin(url, c.profile_url)) for c in card_recs if c.profile_url} - {normalize_url(url)}
+    if profile_evidence and name and len(linked_cards) >= 3:
+        sur = _surname(name)
+        if sur not in urlsplit(url).path.lower():
+            profile_evidence = False
+            if not tpl_cards:  # the heading doctor is one of the cards: read the cards again with them included
+                card_recs = listing.cards(main, url, set()) or card_recs
     signals = {"h1": h1_text[:120], "name": name, "name_source": name_src, "name_evidence": name_ev[:200], "cards": len(card_recs),
                "table_rows": len(table_recs), "jsonld_doctors": len(ld_docs), "microdata_doctors": len(md_docs),
                "embedded_doctors": len(emb_docs), "template": bool(tpl_hit or tpl_cards)}
@@ -177,6 +186,10 @@ def extract_page(page: Page) -> PageResult:
     for r in listing_recs:
         key = (r.get("name") or "").casefold()
         if not key or key in seen:
+            continue
+        if result.page_type == "profile" and (not r.profile_url or normalize_url(urljoin(url, r.profile_url)) == normalize_url(url)):
+            # On one doctor's page, other 'Dr. X' mentions without their own profile link are text
+            # (awards, 'Dr. Krishna has a special interest...', video titles), not more doctors.
             continue
         seen.add(key)
         if r.layers.get("name") != "template":

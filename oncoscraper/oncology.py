@@ -27,6 +27,32 @@ def _terms(text: str) -> list[tuple[str, float]]:
     return out
 
 
+# Staff who are not doctors (often listed on cancer-centre team pages).
+NON_DOCTOR = re.compile(
+    r"\b(?:dieti(?:c|t)ian|nutritionist|physiotherapist|psychologist|counsell?or|nurse|nursing|technologist|"
+    r"technician|physicist|pharmacist|social worker|coordinator|manager|executive|administrator|dosimetrist|"
+    r"radiographer|therapist|optometrist|audiologist|speech)\b", re.I)
+# A clearly different speciality in the doctor's own title, with no cancer word next to it.
+OTHER_SPECIALTY = re.compile(
+    r"cardio|cardiac|angioplasty|spine|orthop|joint replacement|neurolog(?!.*onc)|nephro|dermat|ophthal|\bent\b|"
+    r"psychiat|dental|dentist|gyna?ecolog(?!.*onc)|obstetric|ivf|infertility|pulmonolog|chest physician|"
+    r"rheumat|endocrin|diabet|gastroenterolog(?!.*onc)|hepatolog|urolog(?!.*onc)|plastic surg(?!.*onc)|bariatric|"
+    r"cosmetic|ayurved|homoeo|homeo", re.I)
+ONCO_IN_TITLE = re.compile(r"onco|cancer|tumou?r|haemat|hemat|bmt|bone marrow|leuk|lymph|radiother|radiation|"
+                           r"nuclear medicine|pet[- ]?ct", re.I)
+
+
+def veto(rec: DoctorRecord) -> bool:
+    """Not an oncologist whatever the page says: non-doctor staff, or another speciality in the title.
+    A cardiologist whose bio mentions 'oncology' is still a cardiologist."""
+    own_title = " | ".join(str(rec.get(f) or "") for f in ("designation", "specialty", "department"))
+    if NON_DOCTOR.search(own_title) or (OTHER_SPECIALTY.search(own_title) and not ONCO_IN_TITLE.search(own_title)):
+        rec.oncology_score = 0.0
+        rec.oncology_terms = ["not an oncologist: " + own_title[:80]]
+        return True
+    return False
+
+
 def score(rec: DoctorRecord, page_context: str = "") -> None:
     total = 0.0
     terms: list[str] = []
@@ -55,6 +81,8 @@ def score(rec: DoctorRecord, page_context: str = "") -> None:
         if found:
             total += 0.5 * max(w for _, w in found)
             terms.append("listed on oncology page")
+    if veto(rec):
+        return
     rec.oncology_score = max(rec.oncology_score, total)
     for t in terms:
         if t not in rec.oncology_terms:
