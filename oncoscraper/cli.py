@@ -75,6 +75,7 @@ def main(argv=None) -> int:
     b.add_argument("file", help="hospital list in the standard template (.xlsx or .csv)")
     b.add_argument("--out", default="india_oncologists.xlsx", help="combined Excel file (default india_oncologists.xlsx)")
     b.add_argument("--pages-per-site", type=int, default=150, help="page budget for each hospital (default 150)")
+    b.add_argument("--workers", type=int, default=4, help="hospitals crawled at the same time (default 4, max 8)")
     b.add_argument("--only", help="only hospitals whose name contains this text, e.g. --only Apollo")
     b.add_argument("--no-resume", action="store_true", help="re-crawl hospitals that already finished")
     common(b)
@@ -141,14 +142,15 @@ def main(argv=None) -> int:
 
         def show(e):
             if e["event"] == "site_start":
-                print(f"\n=== [{e['index']}/{e['total']}] {e['hospital']}  {' '.join(e['urls'])}", flush=True)
+                print(f"\n=== start [{e['index']}/{e['total']}] {e['hospital']}  {' '.join(e['urls'])}", flush=True)
             elif e["event"] == "site_done":
                 print(f"--- {e['hospital']}: {e['status']}, {e['pages']} pages, {e['doctors']} doctors, "
                       f"{e['oncologists']} oncologists ({e['with_phone']} with phone, {e['with_email']} with email)  "
                       f"{e['note']}", flush=True)
-            elif e["event"] in ("page", "sitemap"):
-                _print_progress(e)
-        path = run_batch(sources, a.out, _config(a), a.pages_per_site, resume=not a.no_resume, progress=show)
+            elif e["event"] in ("page", "sitemap") and a.workers <= 1:
+                _print_progress(e)  # with several hospitals at once, per-page lines would interleave
+        path = run_batch(sources, a.out, _config(a), a.pages_per_site, resume=not a.no_resume, progress=show,
+                         workers=max(1, min(8, a.workers)))
         print(f"\nSaved combined file: {path.resolve()}")
         return 0
     if a.cmd == "page":

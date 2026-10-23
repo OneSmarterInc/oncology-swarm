@@ -211,6 +211,7 @@ $('b-start').onclick = async () => {
   const body = await fileBody(); if (!body) return;
   try {
     Object.assign(body, { pages_per_site: num('b-pages', 'Pages per hospital', 1, 5000), delay_seconds: num('b-delay', 'Delay', 0, 30),
+      workers: num('b-workers', 'Hospitals at the same time', 1, 8),
       render: $('b-render').value, all_specialties: $('b-all').checked, use_sitemaps: $('b-sitemap').checked });
   } catch (e) { say($('b-msg'), e.message, 'bad'); return; }
   $('b-start').disabled = true;
@@ -232,10 +233,11 @@ async function pollBatch() {
   const r = await api(`/api/batch/${batchId}`);
   if (!r.ok) { say($('b-msg'), r.error, 'bad'); return; }
   const j = r.data;
-  $('b-idx').textContent = `${j.index}/${j.total}`; $('b-time').textContent = j.elapsed + 's';
+  $('b-idx').textContent = `${j.sites.length}/${j.total}`; $('b-time').textContent = j.elapsed + 's';
   $('b-pagesnow').textContent = j.progress.fetched || 0; $('b-onconow').textContent = j.progress.oncologists || 0;
   $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
-  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${j.current}`
+  const now = (j.running || []).map(r => `${r.hospital} (${r.pages} pages)`).join(', ') || j.current;
+  $('b-current').textContent = j.state === 'running' ? `Now crawling: ${now}`
     : j.state === 'paused' ? `Paused at: ${j.current} (press Resume to carry on)` : `Batch ${j.state}.`;
   $('b-pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
   const wrap = $('b-wrap'), keep = wrap.scrollTop;  // keep the user's scroll position on refresh

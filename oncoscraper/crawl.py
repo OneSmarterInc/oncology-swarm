@@ -266,9 +266,16 @@ class Crawler:
                         if PROFILE_URL_HINTS.search(path) or LISTING_URL_HINTS.search(path) or any(p in path for p in self.cfg.extra_profile_patterns if p):
                             self._push(u, 1, from_onco=bool(ONCO_URL_HINTS.search(path)), start=s)
         fetched = 0
+        stale = 0  # pages in a row that showed no doctor
+        self.stopped_stale = False
         counts = {"profile": 0, "listing": 0, "other": 0, "error": 0}
         try:
             while self._frontier and fetched < self.cfg.max_pages and not self.stop_event.is_set():
+                if self.cfg.stale_pages and stale >= self.cfg.stale_pages and self.merger.records:
+                    # The best pages are crawled first; this many empty pages in a row means the
+                    # doctor pages are done. Stop early instead of using the rest of the budget.
+                    self.stopped_stale = True
+                    break
                 while self.pause_event.is_set() and not self.stop_event.is_set():
                     time.sleep(0.3)  # paused: keep everything found so far and wait for Resume
                 if self.stop_event.is_set():
@@ -289,6 +296,7 @@ class Crawler:
                 result.pages.append(PageLog(page.final_url, page.status, pr.page_type, len(pr.doctors), depth, note))
                 start = next((s for s in starts if same_site(page.final_url, s, self.cfg.include_subdomains)), starts[0])
                 page_onco = bool(ONCO_URL_HINTS.search(urlsplit(page.final_url).path)) or any(d.is_oncology for d in pr.doctors) or from_onco
+                stale = 0 if pr.doctors else stale + 1
                 for rec in pr.doctors:
                     merged = self.merger.add(rec)
                     if merged.is_oncology and merged.profile_url:
@@ -329,6 +337,7 @@ class Crawler:
             "doctors_found": len(result.doctors), "oncologists": len(result.oncologists),
             "profiles_fetched": sum(1 for d in result.doctors if d.page_type == "profile"),
             "seconds": round(time.time() - t0, 1), "stopped_early": self.stop_event.is_set(),
+            "finished_early_no_more_doctors": self.stopped_stale,
             "frontier_left": len(self._frontier), "blocked_by_robots": len(self.blocked),
         }
         self.progress({"event": "done", **result.stats})

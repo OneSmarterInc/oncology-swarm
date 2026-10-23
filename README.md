@@ -124,6 +124,7 @@ Command line:
 | Option | Meaning |
 |---|---|
 | `--pages-per-site 150` | page budget per hospital when the row has no Max Pages (default 150) |
+| `--workers 4` | hospitals crawled at the same time (default 4, max 8); rows on the same website still go one at a time |
 | `--only Apollo` | run only hospitals whose name contains "Apollo" |
 | `--no-resume` | re-crawl hospitals that already finished |
 
@@ -195,6 +196,7 @@ A phone or email that appears on 3 or more doctors is moved to the Hospital / De
 - At least 1.5 s between requests to one site by default, longer if robots.txt asks.
 - Booking, login, blog, careers, packages and language-copy pages are skipped.
 - Page budget (`--max-pages`, default 200) and depth limit (default 4).
+- A site stops early after 40 pages in a row with no doctor on them (the best pages are crawled first), so the rest of the budget is not wasted.
 
 ## When a site gives poor results
 

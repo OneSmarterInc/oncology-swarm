@@ -155,7 +155,7 @@ def test_partial_excel_while_batch_runs(site_url, tmp_path, monkeypatch):
     live, snaps = {}, []
 
     def progress(e):
-        if e["event"] == "page" and live.get("src") and live["src"].row == 3 and not snaps:
+        if e["event"] == "page" and 3 in (live.get("active") or {}) and not snaps:
             snaps.append(snapshot_xlsx(live, tmp_path / "part.xlsx"))
 
     run_batch(srcs, tmp_path / "all.xlsx", ScrapeConfig(delay_seconds=0, render="never", use_sitemaps=False,
@@ -316,3 +316,27 @@ def test_portal_history_directory_dashboard_and_resume(site_url, tmp_path, monke
     assert client.delete(f"/api/runs/{bid}").json()["ok"]
     assert all(x["id"] != bid for x in client.get("/api/runs").json()["runs"])
     web._STORE = None
+
+
+def test_batch_crawls_several_sites_at_once(site_url, waf_url, tmp_path):
+    """Two different websites run at the same time; rows on the same website stay one after another."""
+    import threading
+    from oncoscraper.batch import run_batch
+    from oncoscraper.config import ScrapeConfig
+    from oncoscraper.sources import Source
+    srcs = [Source(row=2, hospital="Site A", urls=[f"{site_url}/specialities/cancer-care"]),
+            Source(row=3, hospital="Site A2", urls=[f"{site_url}/faculty/radiation-oncology"]),
+            Source(row=4, hospital="Site B", urls=[f"{waf_url}/doctor/dr-meenu-walia"])]
+    live, seen_together = {}, []
+
+    def progress(e):
+        act = live.get("active") or {}
+        if len(act) > 1:
+            seen_together.append({s.hospital for _, s in act.values()})
+
+    out = run_batch(srcs, tmp_path / "par.xlsx", ScrapeConfig(delay_seconds=0.2, render="never", use_sitemaps=False,
+                                                              allow_private_hosts=True),
+                    per_site_pages=4, resume=False, progress=progress, live=live, workers=4)
+    assert out.is_file()
+    assert seen_together and all(not {"Site A", "Site A2"} <= g for g in seen_together)
+    assert any("Site B" in g for g in seen_together)

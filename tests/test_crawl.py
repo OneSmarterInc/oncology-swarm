@@ -119,3 +119,10 @@ def test_plain_http_cannot_connect_falls_back_to_browser(site_url, monkeypatch):
     assert result.pages[0].page_type != "error"
     assert result.doctors
     assert crawler.fetcher.browser_hosts
+
+
+def test_stops_early_when_pages_stop_showing_doctors(site_url):
+    crawler = Crawler(cfg(max_pages=200, stale_pages=2))
+    result = crawler.run([site_url + "/"])
+    assert crawler.stopped_stale and result.stats["finished_early_no_more_doctors"]
+    assert result.oncologists and result.stats["pages_fetched"] < 18  # the full crawl reads 18 pages

@@ -69,8 +69,8 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
         merger.add(DoctorRecord.from_full_dict(d.to_full_dict()))
     pages = list(live.get("pages") or [])
     summary = [dict(r) for r in live.get("summary") or []]
-    crawler, src = live.get("crawler"), live.get("src")
-    if crawler is not None and src is not None:
+    running = list((live.get("active") or {}).values())
+    for crawler, src in running:
         current = [DoctorRecord.from_full_dict(d.to_full_dict()) for d in list(crawler.merger.records)]
         demote_sitewide(current, {k: set(v) for k, v in list(crawler.value_pages.items())})
         for c in current:
@@ -79,7 +79,7 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
                 c.set("hospital", src.hospital, "hospital list", "Hospital Name column of the uploaded list", c.source_url)
             merger.add(c)
     demote_shared(merger.records)
-    if crawler is not None and src is not None:  # counted after shared desk numbers are moved
+    for crawler, src in running:  # counted after shared desk numbers are moved
         mine = [d for d in merger.records if d.source_hospital == src.hospital]
         onco = [d for d in mine if d.is_oncology]
         summary.append({"row": src.row, "hospital": src.hospital, "status": "in progress",
@@ -106,10 +106,20 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
 CONTACT_FIELDS = ("phone", "email", "contact_phone", "contact_email")
 
 
+def _host(src: Source) -> str:
+    from urllib.parse import urlsplit
+    return (urlsplit(src.urls[0]).netloc or src.hospital).lower().removeprefix("www.") if src.urls else src.hospital
+
+
 def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_site_pages: int,
               resume: bool = True, progress: Callable[[dict], None] | None = None,
               stop_event: threading.Event | None = None, live: dict | None = None,
-              pause_event: threading.Event | None = None) -> Path:
+              pause_event: threading.Event | None = None, workers: int = 4) -> Path:
+    """Crawl hospitals in parallel (``workers`` at a time). Rows on the same website run one after
+    another in the same worker, so each site still gets one polite request at a time."""
+    import queue
+    from concurrent.futures import ThreadPoolExecutor
+
     progress = progress or (lambda e: None)
     stop_event = stop_event or threading.Event()
     out = Path(out)
@@ -119,69 +129,102 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
     pages: list[PageLog] = []
     summary: list[dict] = []
     t0 = time.time()
+    active: dict[int, tuple] = {}  # row -> (crawler, source) being crawled now
+    lock = threading.Lock()
     if live is not None:  # lets the web UI write a partial Excel at any time
-        live.update(merger=merger, pages=pages, summary=summary, sources=sources, crawler=None, src=None, t0=t0)
-    for i, src in enumerate(sources, 1):
-        while pause_event is not None and pause_event.is_set() and not stop_event.is_set():
-            time.sleep(0.3)
-        if stop_event.is_set():
-            break
+        live.update(merger=merger, pages=pages, summary=summary, sources=sources, active=active, t0=t0)
+    started = [0]
+    done_q: queue.Queue = queue.Queue()
+
+    def crawl_one(src: Source) -> tuple[dict, str]:
         slug = f"{_slug(src.hospital)}-r{src.row}"
         jpath = site_dir / f"{slug}.json"
-        progress({"event": "site_start", "index": i, "total": len(sources), "hospital": src.hospital, "urls": src.urls})
         if resume and jpath.is_file():
-            data = json.loads(jpath.read_text(encoding="utf-8"))
-            status = "resumed"
-        else:
-            cfg = ScrapeConfig(**{
-                **base.__dict__,
-                "max_pages": src.max_pages or per_site_pages,
-                "extra_profile_patterns": list(base.extra_profile_patterns) + src.patterns,
-                "include_subdomains": base.include_subdomains or src.include_subdomains,
-                "render": src.render or base.render,
-            })
-            try:
-                crawler = Crawler(cfg, progress, stop_event, pause_event)
-                if live is not None:
-                    live.update(crawler=crawler, src=src)
-                res = crawler.run(src.urls)
-                data = {"hospital": src.hospital, "urls": src.urls, "stats": res.stats,
-                        "doctors": [d.to_full_dict() for d in res.doctors],
-                        "pages": [p.__dict__ for p in res.pages], "error": None}
-            except Exception as exc:  # one bad site must not stop the batch
-                data = {"hospital": src.hospital, "urls": src.urls, "stats": {}, "doctors": [], "pages": [],
-                        "error": f"{type(exc).__name__}: {exc}"}
-            stopped = bool(data["stats"].get("stopped_early"))
-            all_failed = bool(data["pages"]) and all(p["page_type"] == "error" for p in data["pages"])
-            if not stopped and not data["error"] and not all_failed:  # a hospital cut short by Stop is crawled again next time
-                jpath.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            status = "error" if data["error"] else ("stopped" if stopped else ("failed" if all_failed else "done"))
-        docs = [DoctorRecord.from_full_dict(d) for d in data["doctors"]]
-        for d in docs:
-            d.source_hospital = src.hospital
-            if not d.get("hospital"):  # the name from the hospital list beats an empty cell
-                d.set("hospital", src.hospital, "hospital list", "Hospital Name column of the uploaded list", d.source_url)
-            merger.add(d)
-        pages.extend(PageLog(**p) for p in data["pages"])
-        if live is not None:
-            live.update(crawler=None, src=None)
-        onco = [d for d in docs if d.is_oncology]
-        failed = [p for p in data["pages"] if p["page_type"] == "error"]
-        robots = sum(1 for p in failed if "robots.txt" in (p.get("note") or ""))
-        note = data.get("error") or ""
-        if not note and failed:
-            note = _failure_note(failed, len(data["pages"]))
-        if src.warnings:
-            note = (note + "; " if note else "") + "; ".join(src.warnings)
-        summary.append({
-            "row": src.row, "hospital": src.hospital, "status": status, "pages": len(data["pages"]),
-            "doctors": len(docs), "oncologists": len(onco),
-            "with_phone": sum(1 for d in onco if d.get("phone")),
-            "with_email": sum(1 for d in onco if d.get("email")),
-            "with_any_contact": sum(1 for d in onco if any(d.get(f) for f in ("phone", "email", "contact_phone", "contact_email"))),
-            "start_urls": " ".join(src.urls), "note": note,
+            return json.loads(jpath.read_text(encoding="utf-8")), "resumed"
+        cfg = ScrapeConfig(**{
+            **base.__dict__,
+            "max_pages": src.max_pages or per_site_pages,
+            "extra_profile_patterns": list(base.extra_profile_patterns) + src.patterns,
+            "include_subdomains": base.include_subdomains or src.include_subdomains,
+            "render": src.render or base.render,
         })
-        progress({"event": "site_done", **summary[-1]})
+        try:
+            crawler = Crawler(cfg, progress, stop_event, pause_event)
+            with lock:
+                active[src.row] = (crawler, src)
+            res = crawler.run(src.urls)
+            data = {"hospital": src.hospital, "urls": src.urls, "stats": res.stats,
+                    "doctors": [d.to_full_dict() for d in res.doctors],
+                    "pages": [p.__dict__ for p in res.pages], "error": None}
+        except Exception as exc:  # one bad site must not stop the batch
+            data = {"hospital": src.hospital, "urls": src.urls, "stats": {}, "doctors": [], "pages": [],
+                    "error": f"{type(exc).__name__}: {exc}"}
+        stopped = bool(data["stats"].get("stopped_early"))
+        all_failed = bool(data["pages"]) and all(p["page_type"] == "error" for p in data["pages"])
+        if not stopped and not data["error"] and not all_failed:  # a hospital cut short by Stop is crawled again next time
+            jpath.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return data, "error" if data["error"] else ("stopped" if stopped else ("failed" if all_failed else "done"))
+
+    def worker(group: list[Source]) -> None:
+        for src in group:
+            while pause_event is not None and pause_event.is_set() and not stop_event.is_set():
+                time.sleep(0.3)
+            if stop_event.is_set():
+                return
+            with lock:
+                started[0] += 1
+                index = started[0]
+            progress({"event": "site_start", "index": index, "total": len(sources), "hospital": src.hospital,
+                      "urls": src.urls, "row": src.row})
+            try:
+                data, status = crawl_one(src)
+            except Exception as exc:  # noqa: BLE001 - never lose the worker
+                data, status = ({"hospital": src.hospital, "urls": src.urls, "stats": {}, "doctors": [], "pages": [],
+                                 "error": f"{type(exc).__name__}: {exc}"}, "error")
+            done_q.put((src, data, status))
+
+    groups: dict[str, list[Source]] = {}
+    for src in sources:
+        groups.setdefault(_host(src), []).append(src)
+    pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(groups) or 1)), thread_name_prefix="hospital")
+    futures = [pool.submit(worker, g) for g in groups.values()]
+    try:
+        while True:
+            try:
+                src, data, status = done_q.get(timeout=0.3)
+            except queue.Empty:
+                if all(f.done() for f in futures) and done_q.empty():
+                    break
+                continue
+            # Merging happens here, in one thread, so records are never edited by two crawls at once.
+            docs = [DoctorRecord.from_full_dict(d) for d in data["doctors"]]
+            for d in docs:
+                d.source_hospital = src.hospital
+                if not d.get("hospital"):  # the name from the hospital list beats an empty cell
+                    d.set("hospital", src.hospital, "hospital list", "Hospital Name column of the uploaded list", d.source_url)
+                merger.add(d)
+            pages.extend(PageLog(**p) for p in data["pages"])
+            with lock:
+                active.pop(src.row, None)
+            onco = [d for d in docs if d.is_oncology]
+            failed = [p for p in data["pages"] if p["page_type"] == "error"]
+            note = data.get("error") or ""
+            if not note and failed:
+                note = _failure_note(failed, len(data["pages"]))
+            if src.warnings:
+                note = (note + "; " if note else "") + "; ".join(src.warnings)
+            summary.append({
+                "row": src.row, "hospital": src.hospital, "status": status, "pages": len(data["pages"]),
+                "doctors": len(docs), "oncologists": len(onco),
+                "with_phone": sum(1 for d in onco if d.get("phone")),
+                "with_email": sum(1 for d in onco if d.get("email")),
+                "with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
+                "start_urls": " ".join(src.urls), "note": note,
+            })
+            progress({"event": "site_done", **summary[-1]})
+    finally:
+        pool.shutdown(wait=True)
+    summary.sort(key=lambda r: r["row"])
     demote_shared(merger.records)
     result = CrawlResult([u for s in sources for u in s.urls], merger.records, pages)
     onco = result.oncologists
@@ -190,7 +233,7 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
         "oncologists": len(onco),
         "oncologists_with_doctor_phone": sum(1 for d in onco if d.get("phone")),
         "oncologists_with_doctor_email": sum(1 for d in onco if d.get("email")),
-        "oncologists_with_any_contact": sum(1 for d in onco if any(d.get(f) for f in ("phone", "email", "contact_phone", "contact_email"))),
+        "oncologists_with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
         "seconds": round(time.time() - t0, 1), "stopped_early": stop_event.is_set(),
     }
     progress({"event": "batch_done", **result.stats})

@@ -140,6 +140,7 @@ details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-to
   <div id="b-check-out" hidden style="margin-top:12px"></div>
   <div class="grid">
     <div><label for="b-pages">Pages per hospital</label><input id="b-pages" type="number" value="150" min="1" max="5000"></div>
+    <div><label for="b-workers">Hospitals at the same time</label><input id="b-workers" type="number" value="4" min="1" max="8"></div>
     <div><label for="b-delay">Delay between requests (s)</label><input id="b-delay" type="number" value="1.5" step="0.5" min="0"></div>
     <div><label for="b-render">JavaScript / firewalled sites</label><select id="b-render"><option value="auto">Auto browser</option><option value="never">Never</option><option value="always">Always browser</option></select></div>
     <label class="check"><input type="checkbox" id="b-all"> Keep all specialities</label>
@@ -150,9 +151,9 @@ details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-to
   <div id="b-progress" hidden>
     <div class="bar"><i id="b-bar"></i></div>
     <div class="stats">
-      <div class="stat"><span>Hospital</span><b id="b-idx">0/0</b></div>
-      <div class="stat"><span>Pages (this hospital)</span><b id="b-pagesnow">0</b></div>
-      <div class="stat"><span>Oncologists (this hospital)</span><b id="b-onconow">0</b></div>
+      <div class="stat"><span>Hospitals done</span><b id="b-idx">0/0</b></div>
+      <div class="stat"><span>Pages (running now)</span><b id="b-pagesnow">0</b></div>
+      <div class="stat"><span>Oncologists (running now)</span><b id="b-onconow">0</b></div>
       <div class="stat"><span>Elapsed</span><b id="b-time">0s</b></div>
     </div>
     <p class="hint" id="b-current"></p>

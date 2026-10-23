@@ -283,6 +283,7 @@ class UploadIn(BaseModel):
 
 class BatchIn(UploadIn):
     pages_per_site: int = Field(150, ge=1, le=5000)
+    workers: int = Field(4, ge=1, le=8)  # hospitals crawled at the same time
     max_depth: int = Field(4, ge=0, le=10)
     delay_seconds: float = Field(1.5, ge=0, le=30)
     render: str = "auto"
@@ -362,7 +363,7 @@ class BatchJob:
             out = OUT_DIR / f"batch-{self.id}.xlsx"  # fixed name: a resumed batch continues in the same files
             self.xlsx = run_batch(self.sources, out, base, b.pages_per_site, resume=self.resume,
                                   progress=self._capture, stop_event=self.stop, live=self.live,
-                                  pause_event=self.pause)
+                                  pause_event=self.pause, workers=b.workers)
             self.state = "stopped" if self.stop.is_set() else "done"
             if self.live.get("merger") is not None:
                 _safe(store().save_doctors, self.id, list(self.live["merger"].records))
@@ -434,8 +435,7 @@ def batch_doctors(job_id: str):
     job = BATCHES.get(job_id) or _missing("batch")
     live = job.live
     docs = list(live["merger"].records) if live.get("merger") else []
-    crawler, src = live.get("crawler"), live.get("src")
-    if crawler is not None and src is not None:
+    for crawler, src in list((live.get("active") or {}).values()):
         for d in list(crawler.merger.records):
             d.source_hospital = d.source_hospital or src.hospital
             docs.append(d)
@@ -449,8 +449,14 @@ def batch_status(job_id: str):
     job = BATCHES.get(job_id)
     if not job:
         raise HTTPException(404, "batch not found")
-    return {"id": job.id, "state": _state(job), "error": job.error, "current": job.current, "index": job.index,
-            "total": len(job.sources), "elapsed": round(time.time() - job.started), "progress": job.progress,
+    running = [{"row": src.row, "hospital": src.hospital, "pages": len(c.result_pages),
+                "oncologists": sum(1 for d in list(c.merger.records) if d.is_oncology)}
+               for c, src in sorted(list((job.live.get("active") or {}).values()), key=lambda x: x[1].row)]
+    progress = {"fetched": sum(r["pages"] for r in running), "oncologists": sum(r["oncologists"] for r in running)}
+    return {"id": job.id, "state": _state(job), "error": job.error,
+            "current": ", ".join(r["hospital"] for r in running) or job.current, "running": running,
+            "index": len(job.sites) + len(running),
+            "total": len(job.sources), "elapsed": round(time.time() - job.started), "progress": progress,
             "sites": job.sites, "stats": job.stats, "log": list(job.log)[-60:]}
 
 
