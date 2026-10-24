@@ -149,3 +149,44 @@ def test_named_hero_header_preserved_and_firm_news_removed():
     records = extract(html, "https://firm.com/people/jane-smith")["records"]
     assert len(records) == 1
     assert records[0]["categories"] == ["transactional"]
+
+
+def test_name_only_schema_widget_is_not_a_person_record():
+    html = '<script type="application/ld+json">{"@type":"Person","name":"Alan Fuchsberg"}</script>'
+    for path in ["contact", "services", "news"]:
+        assert extract(html, f"https://firm.com/{path}")["records"] == []
+
+
+def test_schema_person_uses_named_profile_link():
+    html = """<h1>Our team</h1>
+    <a href="/attorneys/alan-fuchsberg">Alan Fuchsberg</a>
+    <script type="application/ld+json">{"@type":"Person","name":"Alan Fuchsberg"}</script>"""
+    a = extract(html, "https://firm.com/team")["records"][0]
+    b = extract(html, "https://firm.com/contact")["records"][0]
+    assert a["profile_url"] == "https://firm.com/attorneys/alan-fuchsberg"
+    assert a["key"] == b["key"]
+
+
+def test_legacy_name_only_duplicates_hidden_but_reviews_preserved(tmp_path):
+    import json
+
+    store = Store(tmp_path / "legacy.db")
+    rid = store.create(
+        RunConfig(sources=[{"organization": "Firm", "url": "https://firm.com/"}])
+    )
+    p = extract("<h1>Jane Smith</h1><p>Attorney</p>", "https://firm.com/jane-smith")[
+        "records"
+    ][0]
+    p.update(is_profile=False, attorney_evidence=False, categories=[], contacts=[])
+    with store.db() as db:
+        db.execute(
+            "INSERT INTO observations VALUES(?,?,?,?)",
+            (rid, p["source_url"], p["key"], json.dumps(p)),
+        )
+    assert store.records(rid) == []
+    with store.db() as db:
+        db.execute(
+            "INSERT INTO reviews VALUES(?,?,?,?,?)",
+            (rid, p["key"], "needs_review", "Keep for investigation", "2026-10-24"),
+        )
+    assert len(store.records(rid)) == 1

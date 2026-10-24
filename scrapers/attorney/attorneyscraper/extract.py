@@ -317,7 +317,17 @@ def extract(
             node.string = " ".join(
                 str(p.get(k, "")) for k in ("name", "jobTitle", "description")
             )
-            target = p.get("url", url)
+            matching_link = next(
+                (
+                    a
+                    for a in main.select("a[href]")
+                    if clean_name(a.get_text(" ", strip=True)).casefold()
+                    == name.casefold()
+                    and not a["href"].startswith(("#", "mailto:", "tel:"))
+                ),
+                None,
+            )
+            target = p.get("url") or (matching_link["href"] if matching_link else url)
             if not isinstance(target, str):
                 target = url
             candidates.append((name, node, urljoin(url, target), p, False))
@@ -377,6 +387,15 @@ def extract(
             for c in page_contacts
             if (c["kind"], c["value"]) not in existing and c["value"] not in fax_values
         )
+        # A repeated name-only widget is not an independently supported person.
+        if (
+            not is_profile
+            and target == canonical_url(url)
+            and not result["attorney_evidence"]
+            and not result["categories"]
+            and not record["contacts"]
+        ):
+            continue
         records.append(record)
     links = []
     for a in soup.select("a[href]"):

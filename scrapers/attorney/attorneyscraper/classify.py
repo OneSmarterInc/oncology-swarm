@@ -122,7 +122,9 @@ def classify(text: str, title: str = "") -> dict:
         if excluded
         else "Biography supports attorney role and specialty"
         if status == "confirmed"
-        else "Attorney role or healthcare specialty needs review",
+        else "Attorney role is not established by the extracted text"
+        if not attorney
+        else "Healthcare specialty is not established by the extracted text",
     }
 
 

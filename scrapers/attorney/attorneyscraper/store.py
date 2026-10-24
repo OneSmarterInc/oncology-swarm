@@ -230,6 +230,16 @@ class Store:
         grouped = {}
         for row in rows:
             p = json.loads(row["payload"])
+            # Hide legacy name-only widget observations without deleting stored evidence.
+            if (
+                not p["is_profile"]
+                and p["profile_url"] == p["source_url"]
+                and not p.get("attorney_evidence")
+                and not p["categories"]
+                and not p["contacts"]
+                and (row["run_id"], p["key"]) not in reviews
+            ):
+                continue
             key = (row["run_id"], p["key"])
             p["run_id"] = row["run_id"]
             if key not in grouped:
