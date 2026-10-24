@@ -8,6 +8,7 @@ finished sites.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import Counter
 import re
 import threading
@@ -71,6 +72,7 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
     summary = [dict(r) for r in live.get("summary") or []]
     running = list((live.get("active") or {}).values())
     for crawler, src in running:
+        pages.extend(list(getattr(crawler, "result_pages", [])))
         current = [DoctorRecord.from_full_dict(d.to_full_dict()) for d in list(crawler.merger.records)]
         demote_sitewide(current, {k: set(v) for k, v in list(crawler.value_pages.items())})
         for c in current:
@@ -83,7 +85,7 @@ def snapshot_xlsx(live: dict, out: str | Path) -> Path:
         mine = [d for d in merger.records if d.source_hospital == src.hospital]
         onco = [d for d in mine if d.is_oncology]
         summary.append({"row": src.row, "hospital": src.hospital, "status": "in progress",
-                        "pages": "", "doctors": len(mine), "oncologists": len(onco),
+                        "pages": len(getattr(crawler, "result_pages", [])), "doctors": len(mine), "oncologists": len(onco),
                         "with_phone": sum(1 for d in onco if d.get("phone")),
                         "with_email": sum(1 for d in onco if d.get("email")),
                         "with_any_contact": sum(1 for d in onco if any(d.get(f) for f in CONTACT_FIELDS)),
@@ -139,8 +141,22 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
     def crawl_one(src: Source) -> tuple[dict, str]:
         slug = f"{_slug(src.hospital)}-r{src.row}"
         jpath = site_dir / f"{slug}.json"
+        fingerprint = hashlib.sha256(json.dumps(
+            {"version": 2, "source": src.as_dict(), "config": base.__dict__, "pages": per_site_pages},
+            sort_keys=True).encode()).hexdigest()
         if resume and jpath.is_file():
-            return json.loads(jpath.read_text(encoding="utf-8")), "resumed"
+            try:
+                cached = json.loads(jpath.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                cached = None
+            if (isinstance(cached, dict) and cached.get("fingerprint") == fingerprint
+                    and isinstance(cached.get("stats"), dict)
+                    and isinstance(cached.get("doctors"), list) and isinstance(cached.get("pages"), list)
+                    and not cached["stats"].get("frontier_left") and not cached.get("error")):
+                return cached, "resumed"
+        # A fresh attempt supersedes the previous cache even if this attempt
+        # stops or fails. Never resurrect an older successful result afterward.
+        jpath.unlink(missing_ok=True)
         cfg = ScrapeConfig(**{
             **base.__dict__,
             "max_pages": src.max_pages or per_site_pages,
@@ -160,10 +176,12 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
             data = {"hospital": src.hospital, "urls": src.urls, "stats": {}, "doctors": [], "pages": [],
                     "error": f"{type(exc).__name__}: {exc}"}
         stopped = bool(data["stats"].get("stopped_early"))
+        incomplete = bool(data["stats"].get("frontier_left"))
+        data["fingerprint"] = fingerprint
         all_failed = bool(data["pages"]) and all(p["page_type"] == "error" for p in data["pages"])
-        if not stopped and not data["error"] and not all_failed:  # a hospital cut short by Stop is crawled again next time
+        if not stopped and not incomplete and not data["error"] and not all_failed:
             jpath.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        return data, "error" if data["error"] else ("stopped" if stopped else ("failed" if all_failed else "done"))
+        return data, "error" if data["error"] else ("stopped" if stopped else ("failed" if all_failed else ("partial" if incomplete else "done")))
 
     def worker(group: list[Source]) -> None:
         for src in group:
@@ -209,6 +227,8 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
             onco = [d for d in docs if d.is_oncology]
             failed = [p for p in data["pages"] if p["page_type"] == "error"]
             note = data.get("error") or ""
+            if status == "partial":
+                note = f"Crawl limit or early-stop rule reached; {data['stats']['frontier_left']} URLs remain queued."
             if not note and failed:
                 note = _failure_note(failed, len(data["pages"]))
             if src.warnings:
@@ -230,6 +250,7 @@ def run_batch(sources: list[Source], out: str | Path, base: ScrapeConfig, per_si
     onco = result.oncologists
     result.stats = {
         "hospitals": len(summary), "pages_fetched": len(pages), "doctors_found": len(result.doctors),
+        "hospitals_partial": sum(s["status"] == "partial" for s in summary),
         "oncologists": len(onco),
         "oncologists_with_doctor_phone": sum(1 for d in onco if d.get("phone")),
         "oncologists_with_doctor_email": sum(1 for d in onco if d.get("email")),

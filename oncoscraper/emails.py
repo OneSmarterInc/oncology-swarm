@@ -92,6 +92,10 @@ def find(text: str) -> list[str]:
         if "@" in m.group(0) and EMAIL_RE.search(m.group(0)):
             continue  # already a plain address
         raw = m.group(0).lower()
+        # Plain prose with 'at' and sentence punctuation is not obfuscation.
+        labelled = re.search(r"\be-?mail\s*:\s*$", text[max(0, m.start()-30):m.start()], re.I)
+        if not labelled and not re.search(r"[\[({]\s*(?:at|dot)\s*[\])}]|\s+dot\s+", raw):
+            continue
         if not re.search(r"\bat\b|\[at\]|\(at\)|\{at\}", raw):
             continue
         addr = f"{m.group(1)}@{DOT_RE.sub('.', m.group(2))}".replace(" ", "")

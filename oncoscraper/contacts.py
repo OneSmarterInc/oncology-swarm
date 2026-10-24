@@ -6,7 +6,7 @@ values are moved from the doctor columns to the hospital/desk columns.
 """
 from __future__ import annotations
 
-from collections import Counter
+import re
 
 from .models import DoctorRecord
 
@@ -46,7 +46,13 @@ def demote_sitewide(records: list[DoctorRecord], value_pages: dict[str, set[str]
 def demote_shared(records: list[DoctorRecord], threshold: int = SHARED_THRESHOLD) -> int:
     moved = 0
     for own, desk in (("phone", "contact_phone"), ("email", "contact_email")):
-        counts = Counter(v for r in records for v in set(_split(r.get(own))))
+        owners = {}
+        for r in records:
+            name = re.sub(r"^(?:dr|prof)\.?\s*", "", r.get("name", ""), flags=re.I)
+            identity = re.sub(r"[^a-z0-9]", "", name.lower()) or r.profile_url or r.source_url
+            for v in set(_split(r.get(own))):
+                owners.setdefault(v, set()).add(identity)
+        counts = {v: len(names) for v, names in owners.items()}
         shared = {v for v, n in counts.items() if n >= threshold}
         if not shared:
             continue

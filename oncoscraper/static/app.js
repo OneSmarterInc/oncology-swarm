@@ -238,10 +238,10 @@ async function pollBatch() {
   $('b-bar').style.width = (100 * j.sites.length / Math.max(1, j.total)) + '%';
   const now = (j.running || []).map(r => `${r.hospital} (${r.pages} pages)`).join(', ') || j.current;
   $('b-current').textContent = j.state === 'running' ? `Now crawling: ${now}`
-    : j.state === 'paused' ? `Paused at: ${j.current} (press Resume to carry on)` : `Batch ${j.state}.`;
+    : j.state === 'paused' ? `Paused at: ${j.current} (press Resume to carry on)` : `Batch ${j.state}.${j.sites.some(s => s.status === 'partial') ? ' Some hospitals are incomplete; see the notes below.' : ''}`;
   $('b-pause').textContent = j.state === 'paused' ? 'Resume' : 'Pause';
   const wrap = $('b-wrap'), keep = wrap.scrollTop;  // keep the user's scroll position on refresh
-  $('b-sites').innerHTML = j.sites.length ? j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${(s.status === 'error' || s.status === 'failed') ? 'bad' : 'ok'}">${esc(s.status)}</td>
+  $('b-sites').innerHTML = j.sites.length ? j.sites.map(s => `<tr><td>${s.row}</td><td>${esc(s.hospital)}</td><td class="${(['error', 'failed', 'partial', 'stopped'].includes(s.status)) ? 'bad' : 'ok'}">${esc(s.status)}</td>
     <td>${s.pages}</td><td>${s.oncologists}</td><td>${s.with_phone}</td><td>${s.with_email}</td><td>${s.with_any_contact}</td><td class="muted">${esc(s.note)}</td></tr>`).join('')
     : `<tr><td colspan="9" class="empty">First hospital in progress…</td></tr>`;
   wrap.scrollTop = keep;

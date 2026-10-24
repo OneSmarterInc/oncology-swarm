@@ -87,12 +87,15 @@ class DoctorRecord:
                 if name == "qualifications" and item:
                     base = item.split()[0].casefold()
                     bases = {c.split()[0].casefold(): idx for idx, c in enumerate(current)}
-                    if base in bases:
+                    if base in bases and (" " not in item or " " not in current[bases[base]]):
                         idx = bases[base]
                         # Keep the more detailed form: 'MD (Medicine)' beats 'MD'.
                         if len(item) > len(current[idx]) and " " not in current[idx]:
+                            seen.discard(current[idx].casefold())
                             current[idx] = item
+                            seen.add(item.casefold())
                             changed = True
+                            self.evidence.append(Evidence(name, item, layer, (snippet or item)[:500], src))
                         continue
                 if item and item.casefold() not in seen and len(item) <= 300:
                     current.append(item)

@@ -81,7 +81,7 @@ def test_batch_csv_with_resume(site_url, tmp_path, capsys, monkeypatch):
         f"Sunrise Faculty,,{site_url}/faculty/radiation-oncology,\n"
         "No URL Hospital,,,\n", encoding="utf-8")
     out = tmp_path / "india.xlsx"
-    args = ["batch", str(csv_path), "--out", str(out), "--delay", "0", "--render", "never", "--pages-per-site", "5", "--no-sitemap"]
+    args = ["batch", str(csv_path), "--out", str(out), "--delay", "0", "--render", "never", "--pages-per-site", "60", "--no-sitemap"]
     assert main(args) == 0
     wb = load_workbook(out)
     assert wb.sheetnames[:2] == ["Summary", "Hospitals"]
@@ -89,7 +89,7 @@ def test_batch_csv_with_resume(site_url, tmp_path, capsys, monkeypatch):
     assert set(hosp) == {"Sunrise Cancer Care", "Sunrise Faculty"}
     header = [c.value for c in wb["Oncologists"][1]]
     rows = [dict(zip(header, [c.value for c in r])) for r in wb["Oncologists"].iter_rows(min_row=2)]
-    hc = next(r for r in rows if r["Name"] == "Dr. Harish Chandra")
+    hc = next(r for r in rows if r["Name"] == "Dr. Harish Chandra" and r["Source Hospital"] == "Sunrise Faculty")
     assert hc["Doctor Email"] == "hchandra@inst.example" and hc["Source Hospital"] == "Sunrise Faculty"
     # Second run resumes from saved per-site results without crawling again.
     assert main(args) == 0
@@ -163,7 +163,7 @@ def test_partial_excel_while_batch_runs(site_url, tmp_path, monkeypatch):
               per_site_pages=3, resume=False, progress=progress, live=live)
     wb = load_workbook(snaps[0])
     hosp = {r[1].value: r[2].value for r in wb["Hospitals"].iter_rows(min_row=2)}
-    assert hosp == {"Sunrise Faculty": "done", "Sunrise Cancer Care": "in progress"}
+    assert hosp == {"Sunrise Faculty": "partial", "Sunrise Cancer Care": "in progress"}
     names = {r[0].value for r in wb["Oncologists"].iter_rows(min_row=2)}
     assert "Dr. Harish Chandra" in names and len(names) > 3
 
@@ -286,7 +286,7 @@ def test_portal_history_directory_dashboard_and_resume(site_url, tmp_path, monke
         {"hospital_name": "Sunrise A", "oncology_page_urls": f"{site_url}/specialities/cancer-care"},
         {"hospital_name": "Sunrise B", "oncology_page_urls": f"{site_url}/faculty/radiation-oncology"}])
     payload = {"filename": "p.xlsx", "content_base64": base64.b64encode(path.read_bytes()).decode(),
-               "pages_per_site": 4, "delay_seconds": 0, "render": "never", "use_sitemaps": False}
+               "pages_per_site": 60, "delay_seconds": 0, "render": "never", "use_sitemaps": False}
     bid = client.post("/api/batch", json=payload).json()["id"]
     _wait(client, f"/api/batch/{bid}", lambda s: s["state"] == "done", tries=300)
     runs = client.get("/api/runs").json()["runs"]
