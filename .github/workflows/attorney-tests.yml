@@ -1,0 +1,46 @@
+name: Attorney scraper checks
+on:
+  push:
+    paths: ['scrapers/attorney/**', '.github/workflows/attorney-tests.yml']
+  pull_request:
+    paths: ['scrapers/attorney/**', '.github/workflows/attorney-tests.yml']
+  workflow_dispatch:
+defaults:
+  run:
+    working-directory: scrapers/attorney
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: scrapers/attorney/requirements*.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m ruff check attorneyscraper tests scripts
+      - run: python -m ruff format --check attorneyscraper tests scripts
+      - run: python -m compileall -q attorneyscraper
+      - run: python -m pytest -q --junitxml=test-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.python }}
+          path: scrapers/attorney/test-results.xml
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/ui_test.py
