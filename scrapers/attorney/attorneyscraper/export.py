@@ -180,6 +180,17 @@ def workbook_bytes(records, run=None, pages=(), audit=()):
 
 
 def parse_sources(filename, data):
+    try:
+        return _parse_sources(filename, data)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            "Cannot read source file. Upload a valid CSV or XLSX workbook."
+        ) from exc
+
+
+def _parse_sources(filename, data):
     from .models import Source
 
     if len(data) > 2_000_000:
@@ -206,7 +217,10 @@ def parse_sources(filename, data):
     for number, row in enumerate(raw, 2):
         if not any(row.values()):
             continue
-        row = {str(k).strip().lower(): str(v or "").strip() for k, v in row.items()}
+        row = {
+            str(k).strip().lower(): ("" if v is None else str(v)).strip()
+            for k, v in row.items()
+        }
         if row.get("enabled", "").lower() in {"no", "false", "0"}:
             continue
         org = row.get("organization") or row.get("firm name") or row.get("name", "")

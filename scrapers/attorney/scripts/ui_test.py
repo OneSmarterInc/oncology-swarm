@@ -76,12 +76,23 @@ def main():
                 page.locator("#sources").fill("Test Law | https://firm.com/jane-smith")
                 page.locator("#start-button").click()
                 page.locator("#run-summary .badge").filter(
-                    has_text="completed"
+                    has_text="Completed"
                 ).wait_for(timeout=15000)
+                assert (
+                    "Starting URLs: 1 of 1 finished"
+                    in page.locator("#run-summary").inner_text()
+                )
+                assert "Successful:" in page.locator("#run-summary").inner_text()
+                assert page.locator("progress").get_attribute("value") == "1"
                 page.get_by_role("button", name="View people", exact=True).click()
                 page.get_by_role("button", name="Inspect", exact=True).click()
                 page.locator("#person-dialog").wait_for(state="visible")
                 assert "jsmith@firm.com" in page.locator("#person-content").inner_text()
+                assert "Email delivery" in page.locator("#person-content").inner_text()
+                assert (
+                    "Attorney match supported"
+                    in page.locator("#people-rows").inner_text()
+                )
                 page.locator("#review-status").select_option("needs_review")
                 page.locator("#review-note").fill("Human review requested for test")
                 page.get_by_role("button", name="Save review", exact=True).click()
@@ -91,6 +102,54 @@ def main():
                 with page.expect_download() as d:
                     page.locator("#export-xlsx").click()
                 assert d.value.suggested_filename.endswith(".xlsx")
+                page.locator("#new-run").click()
+                page.locator("#source-file").set_input_files(
+                    {
+                        "name": "valid.csv",
+                        "mimeType": "text/csv",
+                        "buffer": b"Organization,URL\nOld Firm,https://old.example/\n",
+                    }
+                )
+                page.locator("#upload-status").filter(
+                    has_text="1 source rows"
+                ).wait_for()
+                page.locator("#source-file").set_input_files(
+                    {
+                        "name": "invalid.csv",
+                        "mimeType": "text/csv",
+                        "buffer": b"Organization,URL\nBroken,invalid\n",
+                    }
+                )
+                page.locator("#notice").filter(has_text="Row 2").wait_for()
+                assert page.evaluate("uploaded.length") == 0
+                page.evaluate("""() => {
+                    window.originalFetch = window.fetch;
+                    window.pendingUploads = [];
+                    window.fetch = (url, options) => url === '/api/sources/validate'
+                        ? new Promise(resolve => pendingUploads.push(resolve))
+                        : originalFetch(url, options);
+                }""")
+                page.locator("#source-file").set_input_files(
+                    {"name": "first.csv", "mimeType": "text/csv", "buffer": b"first"}
+                )
+                page.wait_for_function("pendingUploads.length === 1")
+                page.locator("#source-file").set_input_files(
+                    {"name": "second.csv", "mimeType": "text/csv", "buffer": b"second"}
+                )
+                page.wait_for_function("pendingUploads.length === 2")
+                page.evaluate(
+                    """() => pendingUploads[1](new Response(JSON.stringify({sources:[{organization:'Second',url:'https://second.example/'}]}),{status:200}))"""
+                )
+                page.wait_for_function("uploaded.length === 1")
+                page.evaluate(
+                    """() => pendingUploads[0](new Response(JSON.stringify({sources:[{organization:'First',url:'https://first.example/'}]}),{status:200}))"""
+                )
+                page.wait_for_function(
+                    "uploaded[0].organization === 'Second' && !uploadPending"
+                )
+                assert page.evaluate("uploaded[0].organization") == "Second"
+                page.evaluate("window.fetch = window.originalFetch")
+
                 page.locator("[data-view=dashboard]").click()
                 page.get_by_text("People discovered", exact=True).wait_for()
                 page.screenshot(path="/tmp/attorney-overview.png", full_page=True)

@@ -232,6 +232,12 @@ def create_app(db_path=None, fetcher_factory=None):
     @app.post("/api/sources/validate")
     async def validate_sources(request: Request):
         payload = await request.json()
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("filename"), str)
+            or not isinstance(payload.get("data"), str)
+        ):
+            raise ValueError("Provide a filename and base64 file data")
         try:
             data = base64.b64decode(payload.get("data", ""), validate=True)
         except Exception as e:

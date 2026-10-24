@@ -82,11 +82,13 @@ class Store:
 
     def get(self, rid):
         with self.db() as db:
+            db.execute("BEGIN")
             row = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
             if not row:
                 raise KeyError(rid)
             item = dict(row)
             item["config"] = json.loads(item["config"])
+            # Keep run state, progress counts and frontier in one snapshot.
             item["sites"] = [
                 dict(r)
                 for r in db.execute(
@@ -96,6 +98,31 @@ class Store:
             ]
             item["pages_processed"] = sum(s["processed"] for s in item["sites"])
             item["pages_queued"] = sum(s["queued"] for s in item["sites"])
+            pages = [
+                dict(p)
+                for p in db.execute(
+                    "SELECT host,url,status FROM pages WHERE run_id=?", (rid,)
+                )
+            ]
+            seeds = {s["url"] for s in item["config"]["sources"]}
+            terminal = {"done", "error", "skipped"}
+            item["progress"] = {
+                "starting_total": len(seeds),
+                "starting_finished": sum(
+                    p["url"] in seeds and p["status"] in terminal for p in pages
+                ),
+                "successful": sum(p["status"] == "done" for p in pages),
+                "failed": sum(p["status"] == "error" for p in pages),
+                "skipped": sum(p["status"] == "skipped" for p in pages),
+                "waiting": sum(p["status"] == "queued" for p in pages),
+                "reading": [p["url"] for p in pages if p["status"] == "fetching"],
+                "discovered": len(pages),
+            }
+            for site in item["sites"]:
+                subset = [p for p in pages if p["host"] == site["host"]]
+                site["reading"] = sum(p["status"] == "fetching" for p in subset)
+                site["successful"] = sum(p["status"] == "done" for p in subset)
+                site["skipped"] = sum(p["status"] == "skipped" for p in subset)
             return item
 
     def runs(self):
