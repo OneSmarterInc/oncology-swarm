@@ -98,6 +98,7 @@ NAME_STOP = {
     "Medical", "Surgical", "Radiation", "Best", "Top", "In", "At", "Of", "And", "The", "Is", "Has",
     "Experience", "Years", "View", "Know", "More", "Read", "Call", "Contact", "Clinic", "Centre",
     "Center", "Institute", "Speciality", "Specialty", "Haemato", "Hemato", "Paediatric", "Pediatric",
+    "IOSPL",  # hospital affiliation sometimes appended to the doctor name
     "Max", "Apollo", "Fortis", "Manipal", "Medanta", "Narayana", "Tata", "Aiims", "AIIMS", "With",
     "Her", "His", "He", "She", "Who", "Was", "For", "To", "On", "Doctor", "Doctors", "Team", "Our",
     "Name", "Details", "Search", "Find", "Online", "Consultation", "List", "Speak", "Visit", "Timings",

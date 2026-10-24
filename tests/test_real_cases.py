@@ -159,3 +159,78 @@ def test_profile_with_related_doctors_strip_stays_a_profile():
     pr = page("https://h.example/doctors/4567", body)
     assert pr.page_type == "profile" and pr.doctors[0].get("name") == "Dr. Swathi K"
     assert SKIP_URL.search("/doctor/newsha") is None
+
+
+def _fortis_pair():
+    card = _rec(name="Dr. Divesh Goyal", city="Jaipur", hospital="Fortis Healthcare, Jaipur")
+    card.source_url = "https://www.fortis.example/doctors"
+    card.profile_url = None
+    card.page_type = "listing"
+    profile = _rec(name="Dr. Divesh Goyal", city="Jaipur", hospital="Fortis Escorts Hospital, Jaipur")
+    profile.source_url = profile.profile_url = "https://fortis.example/doctors/divesh-goyal"
+    return card, profile
+
+
+def test_fortis_card_profile_hospital_variants_merge_in_both_orders():
+    for reverse in (False, True):
+        card, profile = _fortis_pair()
+        card.set("email", "doctor@example.test", "listing_card")
+        m = Merger()
+        for r in ((profile, card) if reverse else (card, profile)):
+            m.add(r)
+        assert len(m.records) == 1
+        merged = m.records[0]
+        assert merged.page_type == "profile"
+        assert merged.get("hospital") == "Fortis Escorts Hospital, Jaipur"
+        assert merged.get("email") == "doctor@example.test"
+        assert card.source_url in [merged.source_url, *merged.found_on]
+
+
+def test_hospital_variant_merge_requires_identity_evidence():
+    for change in ("city", "missing_city", "host", "name", "source_hospital", "two_profiles"):
+        card, profile = _fortis_pair()
+        if change == "city":
+            profile.values["city"] = "Delhi"
+        elif change == "missing_city":
+            profile.values.pop("city")
+        elif change == "host":
+            profile.source_url = "https://different.example/doctors/divesh-goyal"
+        elif change == "name":
+            profile.values["name"] = "Dr. Dinesh Goyal"
+        elif change == "source_hospital":
+            card.source_hospital, profile.source_hospital = "Fortis A", "Fortis B"
+        else:
+            card.page_type = "profile"
+        m = Merger()
+        m.add(card)
+        m.add(profile)
+        assert len(m.records) == 2, change
+
+
+def test_same_profile_url_does_not_merge_different_batch_hospitals():
+    m = Merger()
+    for hospital in ("Hospital A", "Hospital B", "Hospital A", "Hospital B"):
+        r = _rec(name="Dr. Divesh Goyal")
+        r.source_hospital = hospital
+        m.add(r)
+    assert len(m.records) == 2
+
+
+def test_affiliation_suffix_removed_without_truncating_names():
+    for raw in ("Jyoti Anand IOSPL", "JYOTI ANAND IOSPL", "Dr. Jyoti Anand IOSPL"):
+        assert clean_name(raw) == "Jyoti Anand"
+    assert clean_name("Jyoti ANAND") == "Jyoti ANAND"
+    assert clean_name("RAHUL D L") == "Rahul D L"
+    pr = page("https://h.example/doctors/jyoti-anand",
+              "<h1>Dr. Jyoti Anand IOSPL</h1><p>Consultant Medical Oncology</p>")
+    assert pr.doctors[0].get("name") == "Dr. Jyoti Anand"
+
+
+def test_fortis_variant_merge_with_different_profile_paths():
+    card, profile = _fortis_pair()
+    card.profile_url = "https://fortis.example/jaipur/doctors/divesh-goyal"
+    profile.values["city"] = " jaipur "
+    m = Merger()
+    m.add(card)
+    m.add(profile)
+    assert len(m.records) == 1

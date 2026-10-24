@@ -64,14 +64,14 @@ class Merger:
 
     def __init__(self):
         self.records: list[DoctorRecord] = []
-        self._by_url: dict[str, DoctorRecord] = {}
+        self._by_url: dict[tuple[str, str], DoctorRecord] = {}
         self._by_name: dict[str, list[DoctorRecord]] = {}
         self._by_loose: dict[str, list[DoctorRecord]] = {}
 
     def add(self, rec: DoctorRecord) -> DoctorRecord:
         key_u = url_key(rec.profile_url)
         key_n = name_key(rec.get("name", ""))
-        target = self._by_url.get(key_u) if key_u else None
+        target = self._by_url.get((rec.source_hospital, key_u)) if key_u else None
         if target is None and key_n:
             loose = loose_key(rec.get("name", ""))
             exact = self._by_name.get(key_n, [])
@@ -80,15 +80,24 @@ class Merger:
                 h1, h2 = (cand.get("hospital") or "").lower(), (rec.get("hospital") or "").lower()
                 same_hosp = not h1 or not h2 or h1[:12] == h2[:12] or h1 in h2 or h2 in h1
                 s1, s2 = cand.source_hospital, rec.source_hospital
-                same_hosp = same_hosp and (not s1 or not s2 or s1 == s2)
+                if s1 and s2 and s1 != s2:
+                    continue
                 u1, u2 = url_key(cand.profile_url), key_u
                 c1, c2 = cand.get("city"), rec.get("city")
+                # A listing and profile can use different branch/brand names.
+                # Require exact identity evidence before ignoring the hospital label.
+                host1 = (urlsplit(cand.source_url).hostname or "").lower().removeprefix("www.")
+                host2 = (urlsplit(rec.source_url).hostname or "").lower().removeprefix("www.")
+                same_city = bool(c1 and c2 and c1.strip().casefold() == c2.strip().casefold())
+                card_profile = {cand.page_type, rec.page_type} == {"listing", "profile"}
+                if is_exact and len(key_n) >= 8 and card_profile and host1 and host1 == host2 and same_city:
+                    same_hosp = True
                 # A link to the doctor's own off-site website is not a second profile on this site.
                 urls_ok = not u1 or not u2 or u1 == u2 or u1.split("/", 1)[0] != u2.split("/", 1)[0]
                 if is_exact:
                     # Same full name on one site = same doctor, even on two pages of the site
                     # (MOC '/our-team/x' and '/north-india/doctor/x'), when both cities are known and equal.
-                    ok = urls_ok or (len(key_n) >= 8 and c1 and c2 and c1 == c2)
+                    ok = urls_ok or (len(key_n) >= 8 and same_city)
                 else:
                     # Only initials differ ('Ch. Mohana Vamsy' / 'Mohana Vamsy'): one side must have no initials,
                     # so 'K. Srinivas Rao' and 'P. Srinivas Rao' stay two doctors.
@@ -113,7 +122,7 @@ class Merger:
             else:
                 target.absorb(rec, fill_only=target.page_type == "profile" and rec.page_type != "profile")
         for k in {url_key(target.profile_url), key_u} - {None}:
-            self._by_url[k] = target
+            self._by_url[(rec.source_hospital, k)] = target
         if key_n:
             bucket = self._by_name.setdefault(key_n, [])
             if target not in bucket:
