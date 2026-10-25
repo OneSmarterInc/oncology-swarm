@@ -123,6 +123,22 @@ class Store:
                 site["reading"] = sum(p["status"] == "fetching" for p in subset)
                 site["successful"] = sum(p["status"] == "done" for p in subset)
                 site["skipped"] = sum(p["status"] == "skipped" for p in subset)
+            # A fixed per-site budget keeps discovery from moving progress backwards.
+            # Finished sites consume their share even if they exhaust links early.
+            budget = item["config"]["max_pages"]
+            sites = item["sites"]
+            units = sum(
+                budget
+                if site["status"] in {"completed", "limited", "error"}
+                else min(site["processed"], budget)
+                for site in sites
+            )
+            finished = item["status"] in {"completed", "completed_with_issues"}
+            item["progress"]["percent"] = (
+                100.0
+                if finished
+                else min(99.0, round(100 * units / max(1, budget * len(sites)), 1))
+            )
             return item
 
     def runs(self):

@@ -87,7 +87,7 @@ def main():
                 assert (
                     "Extraction completed" in page.locator("#run-summary").inner_text()
                 )
-                assert page.locator("progress").get_attribute("value") == "1"
+                assert page.locator("progress").get_attribute("value") == "100"
                 assert page.locator("[data-view=review]").count() == 0
                 # Starting URLs can be done while discovered pages are still running.
                 page.evaluate(r"""async () => {
@@ -96,7 +96,7 @@ def main():
                         const response = await original(url, options);
                         if (/\/api\/runs\/[^/]+$/.test(url)) {
                             const run = await response.json();
-                            run.status='running';run.progress.waiting=2;
+                            run.status='running';run.progress.waiting=2;run.progress.percent=35;
                             return new Response(JSON.stringify(run), {status:200});
                         }
                         return response;
@@ -104,7 +104,7 @@ def main():
                     await runDetail();
                     window.fetch=original;
                 }""")
-                assert page.locator("progress").get_attribute("value") is None
+                assert page.locator("progress").get_attribute("value") == "35"
                 assert (
                     "Extraction in progress"
                     in page.locator("#run-summary").inner_text()

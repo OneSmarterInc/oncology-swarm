@@ -15,13 +15,12 @@ async function runList(){const runs=await api('/api/runs');$('run-list').replace
 async function runDetail(){if(!selectedRun)return;const [r,pages]=await Promise.all([api('/api/runs/'+selectedRun),api('/api/runs/'+selectedRun+'/pages')]);$('run-summary').replaceChildren(el('h2',r.name),badge(r.status),el('p',`${r.pages_processed} pages processed · ${r.pages_queued} queued · ${r.config.max_pages} page budget per website`,'progress-text'));const g=r.progress;
 const active=['queued','running','pausing','stopping'].includes(r.status);
 const complete=r.status==='completed' && !g.waiting && !g.reading.length;
-const progress=el('progress');progress.max=1;progress.setAttribute('aria-label','Extraction activity');progress.className='crawl-progress';
-if(!active)progress.value=complete?1:0;
+const progress=el('progress');progress.max=100;progress.value=g.percent;progress.setAttribute('aria-label','Extraction progress');progress.className='crawl-progress';
 const remaining=g.waiting+g.reading.length;
-$('run-summary').append(el('h3',active?'Extraction in progress':complete?'Extraction completed':'Extraction ended with unfinished work or issues'),progress,
+$('run-summary').append(el('h3',active?'Extraction in progress':complete?'Extraction completed':r.status==='completed_with_issues'?'Extraction finished with issues':`Extraction ${r.status}`),el('p',`${g.percent}% of configured run completed`,'progress-text'),progress,
 el('p',`${r.pages_processed} page attempts finished · ${remaining} known pages remaining · ${g.discovered} pages discovered`),
 el('p',`Successful: ${g.successful} · Failed: ${g.failed} · Skipped: ${g.skipped} · Reading now: ${g.reading.length} · Waiting: ${g.waiting}`),
-el('p',active?'More pages may be discovered. The activity bar keeps moving until extraction ends; it is not a percentage.':'Check failed pages and website stop reasons for coverage limits.','muted'));
+el('p','Progress uses the page budget for each website; websites that finish early complete their share. 100% means the configured run has ended, not that every page succeeded. Check failures and stop reasons below.','muted'));
 
 g.reading.forEach(url=>$('run-summary').append(el('p','Currently reading: '+url,'log-row')));
 if(g.waiting && !['running','queued','pausing','stopping'].includes(r.status))$('run-summary').append(el('p',`${g.waiting} discovered pages remain unread. Check the stop reasons below.`));
