@@ -79,11 +79,30 @@ def main():
                     has_text="Completed"
                 ).wait_for(timeout=15000)
                 assert (
-                    "Starting URLs: 1 of 1 finished"
+                    "Extraction completed" in page.locator("#run-summary").inner_text()
+                )
+                assert page.locator("progress").get_attribute("value") == "1"
+                assert page.locator("[data-view=review]").count() == 0
+                # Starting URLs can be done while discovered pages are still running.
+                page.evaluate(r"""async () => {
+                    const original = window.fetch;
+                    window.fetch = async (url, options) => {
+                        const response = await original(url, options);
+                        if (/\/api\/runs\/[^/]+$/.test(url)) {
+                            const run = await response.json();
+                            run.status='running';run.progress.waiting=2;
+                            return new Response(JSON.stringify(run), {status:200});
+                        }
+                        return response;
+                    };
+                    await runDetail();
+                    window.fetch=original;
+                }""")
+                assert page.locator("progress").get_attribute("value") is None
+                assert (
+                    "Extraction in progress"
                     in page.locator("#run-summary").inner_text()
                 )
-                assert "Successful:" in page.locator("#run-summary").inner_text()
-                assert page.locator("progress").get_attribute("value") == "1"
                 page.get_by_role("button", name="View people", exact=True).click()
                 page.get_by_role("button", name="Inspect", exact=True).click()
                 page.locator("#person-dialog").wait_for(state="visible")
@@ -93,16 +112,13 @@ def main():
                     "Attorney match supported"
                     in page.locator("#people-rows").inner_text()
                 )
-                page.locator("#review-status").select_option("needs_review")
-                page.locator("#review-note").fill("Human review requested for test")
-                page.get_by_role("button", name="Save review", exact=True).click()
-                page.locator("#notice").filter(has_text="Review saved").wait_for()
-                page.get_by_role("button", name="Review queue", exact=False).click()
-                page.get_by_role("button", name="Inspect", exact=True).wait_for()
+                assert page.locator("#review-form").count() == 0
+                page.locator("#close-dialog").click()
                 with page.expect_download() as d:
                     page.locator("#export-xlsx").click()
                 assert d.value.suggested_filename.endswith(".xlsx")
                 page.locator("#new-run").click()
+                assert page.locator("#discover").count() == 0
                 page.locator("#source-file").set_input_files(
                     {
                         "name": "valid.csv",
@@ -171,8 +187,8 @@ def main():
                                 "crawl completes",
                                 "directory",
                                 "contact evidence",
-                                "review decision",
-                                "review queue",
+                                "no review controls",
+                                "active progress never full",
                                 "Excel download",
                                 "desktop",
                                 "mobile overflow",
