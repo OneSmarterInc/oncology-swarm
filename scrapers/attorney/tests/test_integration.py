@@ -179,3 +179,22 @@ def test_pause_resume_and_concurrent_run_rejection(tmp_path, factory):
     m.start(rid)
     wait(m)
     assert len(s.records(rid)) == 3
+
+
+def test_url_only_run(tmp_path, factory):
+    app = create_app(tmp_path / "url-only.db", factory)
+    with TestClient(app) as client:
+        token = client.get("/api/session").json()["token"]
+        response = client.post(
+            "/api/runs",
+            json={
+                "sources": [{"url": "https://firm.com/"}],
+                "delay": 0.5,
+            },
+            headers={"x-session-token": token},
+        )
+        assert response.status_code == 201, response.text
+        wait(app.state.manager)
+        records = client.get("/api/directory").json()["items"]
+        assert records
+        assert all(person["organization"] == "firm.com" for person in records)

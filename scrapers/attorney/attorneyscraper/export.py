@@ -236,7 +236,7 @@ def _parse_sources(filename, data):
             )
         except ValueError as e:
             raise ValueError(
-                f"Row {number}: organization and a valid URL are required"
+                f"Row {number}: a valid http:// or https:// URL is required"
             ) from e
     if not result or len(result) > 100:
         raise ValueError("Provide 1–100 enabled source rows")

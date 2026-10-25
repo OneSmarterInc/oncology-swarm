@@ -248,7 +248,7 @@ def create_app(db_path=None, fetcher_factory=None):
     @app.get("/api/template")
     def template():
         return Response(
-            "Organization,URL,City,State,Enabled\nExample law firm,https://example.com/attorneys/,,,no\n",
+            "URL,Organization,City,State,Enabled\nhttps://example.com/attorneys/,,,,no\n",
             media_type="text/csv",
             headers={
                 "Content-Disposition": 'attachment; filename="attorney-sources-template.csv"'

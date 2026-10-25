@@ -73,7 +73,13 @@ def main():
                 page.goto("http://127.0.0.1:8802")
                 page.get_by_text("People discovered", exact=True).wait_for()
                 page.locator("#new-run").click()
-                page.locator("#sources").fill("Test Law | https://firm.com/jane-smith")
+                form = page.locator("#run-form").bounding_box()
+                guidance = page.locator(".guidance").bounding_box()
+                assert guidance["y"] >= form["y"] + form["height"]
+                page.locator("#sources").fill("invalid-url")
+                page.locator("#start-button").click()
+                page.locator("#notice").wait_for(state="visible")
+                page.locator("#sources").fill("https://firm.com/jane-smith")
                 page.locator("#start-button").click()
                 page.locator("#run-summary .badge").filter(
                     has_text="Completed"
@@ -172,6 +178,10 @@ def main():
                 page.set_viewport_size({"width": 390, "height": 844})
                 page.reload()
                 page.get_by_text("People discovered", exact=True).wait_for()
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                )
+                page.locator("#new-run").click()
                 assert page.evaluate(
                     "document.documentElement.scrollWidth <= window.innerWidth"
                 )

@@ -1,7 +1,5 @@
 import time
 
-import pytest
-
 from attorneyscraper.engine import Manager
 from attorneyscraper.extract import extract
 from attorneyscraper.models import RunConfig, Source
@@ -137,9 +135,8 @@ def test_html_challenge_is_not_person():
     )
 
 
-def test_source_whitespace_rejected():
-    with pytest.raises(ValueError):
-        Source(organization="   ", url="https://firm.com")
+def test_source_whitespace_uses_domain():
+    assert Source(organization="   ", url="https://firm.com").organization == "firm.com"
 
 
 def test_named_hero_header_preserved_and_firm_news_removed():

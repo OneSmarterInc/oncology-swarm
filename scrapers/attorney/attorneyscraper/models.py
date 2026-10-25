@@ -43,18 +43,15 @@ def site_key(url: str) -> str:
 
 
 class Source(BaseModel):
-    organization: str = Field(min_length=1, max_length=160)
+    organization: str = Field(default="", max_length=253)
     url: str = Field(max_length=2000)
     city: str = Field(default="", max_length=100)
     state: str = Field(default="", max_length=100)
 
-    @field_validator("organization")
-    @classmethod
-    def clean_organization(cls, value):
-        value = value.strip()
-        if not value:
-            raise ValueError("Organization name is required")
-        return value
+    @model_validator(mode="after")
+    def label_organization(self):
+        self.organization = self.organization.strip() or site_key(self.url)
+        return self
 
     @field_validator("url")
     @classmethod
