@@ -409,5 +409,15 @@ def create_app(db_path=None, fetcher_factory=None):
             raise ValueError("Unknown category")
         return {"queries": discovery_queries(category, location)}
 
+    # Prompt-driven seeding. Optional: the portal works unchanged when the
+    # shared seedsources package is not present, so a missing package is a
+    # missing feature rather than a portal that will not start.
+    try:
+        from .prompt import register as register_prompt
+
+        register_prompt(app, store, manager)
+    except Exception as error:  # pragma: no cover - import-time guard
+        app.state.prompt_error = str(error)
+
     app.add_middleware(BodyLimit)
     return app
