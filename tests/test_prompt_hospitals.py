@@ -209,7 +209,22 @@ def workflow(tmp_path, monkeypatch, hospital_web):
     monkeypatch.setattr(jobs, "ScrapeConfig", lambda **kw: ScrapeConfig(
         **{**kw, "delay_seconds": 0, "retries": 0, "allow_private_hosts": True, "use_sitemaps": False}))
     calls = []
-    monkeypatch.setattr(jobs, "ModelRouter", lambda *a, **k: calls.append(a) or SimpleNamespace(close=lambda: None))
+
+    class Reader:
+        """Stands in for the local model. It also invents 'Pune', which must be dropped (not in the prompt)."""
+        def __init__(self, *a, **k):
+            self.config = {}
+
+        def ask(self, schema, instruction, payload):
+            from oncoscraper.understand import ModelReading
+            calls.append(schema.__name__)
+            assert schema is ModelReading  # the sites engine only asks the model to READ the prompt
+            return ModelReading(cities=["delhi", "Pune"], hospital_kind="cancer")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(jobs, "ModelRouter", Reader)
     history = Store(tmp_path / "history.db")
     db = DiscoveryDB(tmp_path / "prompt-discovery.db")
     manager = PromptManager(db, history, tmp_path / "results")
@@ -227,7 +242,8 @@ def test_prompt_to_oncologists_excel_without_any_model(workflow):
     manager.execute(job["id"])
     saved = manager.db.get(job["id"])
     assert saved["state"] in {"done", "partial"}, saved.get("error")
-    assert searches and calls == []
+    assert searches and set(calls) <= {"ModelReading"}  # no page or doctor was judged by a model
+    assert saved["report"]["plan"]["request"]["locations"] == ["Delhi"]  # invented 'Pune' dropped
     report = saved["report"]
     assert report["plan"]["hospitals"][0]["name"] == "Lotus Cancer Hospital"
     wb = load_workbook(saved["xlsx"], read_only=True, data_only=True)

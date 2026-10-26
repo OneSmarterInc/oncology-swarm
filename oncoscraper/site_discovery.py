@@ -41,6 +41,9 @@ TYPE_WORDS = {
     "super-speciality": r"hospital",
     "government": r"government|govt|aiims|state|central",
     "private": r"hospital",
+    "children's": r"child|paediatric|pediatric|kids",
+    "charitable": r"trust|charit|mission|foundation|society|ngo",
+    "medical": r"medical college|teaching|institute of medical",
 }
 COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
                "eight": 8, "nine": 9, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30, "fifty": 50}
@@ -64,18 +67,34 @@ class Request:
     names: list[str] = field(default_factory=list)
     specialties: list[str] = field(default_factory=list)
     unfiltered_conditions: bool = False
+    locations: list[str] = field(default_factory=list)          # every city the user asked for
+    states: list[str] = field(default_factory=list)
+    excluded_locations: list[str] = field(default_factory=list)
+    excluded_names: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.location and self.location not in self.locations:
+            self.locations = [self.location, *self.locations]
 
     def as_dict(self):
         return {"count": self.count, "kind": self.kind, "location": self.location, "target": self.target,
                 "names": list(self.names), "specialties": list(self.specialties),
-                "unfiltered_conditions": self.unfiltered_conditions}
+                "unfiltered_conditions": self.unfiltered_conditions, "locations": list(self.locations),
+                "states": list(self.states), "excluded_locations": list(self.excluded_locations),
+                "excluded_names": list(self.excluded_names)}
+
+    @property
+    def places(self):
+        return [*self.locations, *self.states]
 
     def summary(self):
         what = " ".join(w for w in [self.kind, "hospitals"] if w)
-        where = f" in {self.location}" if self.location else ""
+        where = f" in {' / '.join(self.places)}" if self.places else ""
         named = f" named: {', '.join(self.names)}" if self.names else ""
         spec = f", {', '.join(self.specialties)} only" if self.specialties else ""
-        return f"{self.count} {what}{where}{named}{spec} -> official {self.target} pages"
+        skip = self.excluded_locations + self.excluded_names
+        not_ = f", not {', '.join(skip)}" if skip else ""
+        return f"{self.count} {what}{where}{named}{spec}{not_} -> official {self.target} pages"
 
 
 def _city_any_case(text):
@@ -98,43 +117,10 @@ def _good_name(option):
     return (4 <= len(option) <= 90 and HOSPITAL_WORDS.search(option) and not NOT_A_NAME.search(option))
 
 
-def read_request(prompt):
-    """Read count, hospital type, city, target, specialties and named hospitals from plain words.
-
-    Deliberately literal: it never invents a city or a type. Anything it cannot
-    read stays empty and simply widens the search instead of narrowing it wrongly.
-    """
-    text = " ".join(str(prompt or "").split())
-    low = text.casefold()
-    names = []
-    for match in NAME_IN_TITLE.finditer(text):
-        name = " ".join(match.group(1).split()).strip(" ,-|")
-        # "cancer hospitals" is a type, not the name of a hospital.
-        if (8 <= len(name) <= 90 and not re.match(r"^(?:the\s+)?(?:\w+\s+)?(?:hospitals?|institutes?)$", name, re.I)
-                and not re.match(r"^(?:\w+\s+)?cancer\s+(?:centres?|centers?|institutes?|hospitals?)$", name, re.I)
-                and name.casefold() not in {n.casefold() for n in names}):
-            names.append(name)
-    kind = next((k for k in TYPE_WORDS if re.search(rf"\b{k}\b", low)), "")
-    if kind == "oncology":
-        kind = "cancer"
-    city = city_from(text) or _city_any_case(text)
-    if city and names and city.casefold() in " ".join(names).casefold():
-        city = ""  # the city appeared only inside a hospital's own name
-    count_match = re.search(rf"\b(\d{{1,3}})\s+(?:[\w-]+\s+){{0,2}}?{HOSPITAL_NOUN}", low)
-    word_match = re.search(r"\b(" + "|".join(COUNT_WORDS) + rf")\s+(?:[\w-]+\s+){{0,2}}?{HOSPITAL_NOUN}", low)
-    if count_match:
-        count = int(count_match.group(1))
-    elif word_match:
-        count = COUNT_WORDS[word_match.group(1)]
-    else:
-        count = len(names) or 10
-    # 'radiation oncologists' -> Radiation Oncology. Generic 'oncologists' is no filter.
-    spec_text = re.sub(r"oncologists?\b", "oncology", low)
-    specialties = sub_specialties(spec_text)
-    wants_all = bool(re.search(r"\ball (?:the )?doctors\b|\bevery doctor\b|\ball specialit", low))
-    target = "doctors" if wants_all or (re.search(r"\bdoctors?\b", low) and not ONCO_WORDS.search(low)) else "oncologists"
-    return Request(count=max(1, min(count, 100)), kind=kind, location=city, target=target, names=names,
-                   specialties=specialties, unfiltered_conditions=bool(PERSON_CONDITIONS.search(text)))
+def read_request(prompt, model=None):
+    """Count, kind, places, exclusions, named hospitals and specialities, in any case and with typos."""
+    from .understand import understand
+    return understand(prompt, model)[0]
 
 
 @dataclass
@@ -241,7 +227,7 @@ def read_identity(page):
     return name, (city_from(text) or ""), text
 
 
-def survey_site(homepage, make_crawler, kind="", location="", target="oncologists", budget=45):
+def survey_site(homepage, make_crawler, kind="", location="", target="oncologists", budget=45, request=None):
     """Crawl a little of one site and let the extractor answer which doctors are there."""
     started = time.monotonic()
     crawler = make_crawler()
@@ -294,7 +280,35 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
         who = "oncologists" if target == "oncologists" else "doctors"
         return None, Rejected(host, f"No page on this site listed {who} that the extractor could read",
                               name, city, pages_read)
-    if location:
+    if request is not None:
+        from .understand import STATES
+        from .understand import _GENERIC
+
+        def same(asked):
+            words = [w for w in re.findall(r"[a-z]+", asked.casefold()) if w not in _GENERIC] or \
+                    re.findall(r"[a-z]+", asked.casefold())
+            hay = (str(name) + " " + host).casefold()
+            return all(w in hay for w in words)
+        if request.excluded_names and any(same(x) for x in request.excluded_names):
+            return None, Rejected(host, f"You asked to leave out {name}", name, city, pages_read)
+        if request.names and not any(same(x) for x in request.names):
+            return None, Rejected(host, f"{name} is not one of the hospitals you named", name, city, pages_read)
+        wanted = [*request.locations, *(c for st in request.states for c in STATES.get(st, []))]
+        stated = {CITY_CANON.get(c, c) for c in doctor_cities}
+        site_cities = stated | ({CITY_CANON.get(city, city)} if city else set())
+        if request.excluded_locations and site_cities and site_cities <= set(request.excluded_locations):
+            return None, Rejected(host, f"Site is in {', '.join(sorted(site_cities))}, which you asked to leave out",
+                                  name, city, pages_read)
+        if wanted:
+            hit = next((w for w in wanted if w in stated or re.search(rf"\b{re.escape(w)}\b", home_text, re.I)), "")
+            if not hit:
+                found = CITY_CANON.get(city, city)
+                where = " / ".join(request.places)
+                return None, Rejected(host, f"Site says {found}, not {where}" if found else f"Site never states {where}",
+                                      name, city, pages_read)
+            hospital.evidence["location"] = f"{hit} read from this site"
+            hospital.city = hit
+    elif location:
         want = _canon_city(location)
         stated = {CITY_CANON.get(c, c).casefold() for c in doctor_cities}
         found = CITY_CANON.get(city, city)
@@ -309,9 +323,11 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
         else:
             return None, Rejected(host, f"Site never states {want}", name, city, pages_read)
     if kind:
-        pattern = TYPE_WORDS.get(kind.strip().casefold().split()[0], re.escape(kind.strip()))
-        if not re.search(pattern, blob, re.I):
-            return None, Rejected(host, f"Nothing on this site shows it is a {kind} hospital", name, city, pages_read)
+        for one in re.findall(r"children's|medical college|[\w-]+", kind.strip().casefold()):
+            pattern = TYPE_WORDS.get(one.split()[0], re.escape(one))
+            if not re.search(pattern, blob, re.I):
+                return None, Rejected(host, f"Nothing on this site shows it is a {one} hospital", name, city,
+                                      pages_read)
         hospital.evidence["institution_type"] = f"{kind} confirmed in the site's own pages"
     count = hospital.oncologists_found if target == "oncologists" else hospital.doctors_found
     hospital.evidence["doctors"] = f"{count} {target} read from {len(doctor_urls)} page(s)"
@@ -320,13 +336,17 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
 
 def discover_hospitals(search, make_crawler, want=10, kind="", location="", target="oncologists",
                        queries=(), names=(), max_searches=12, max_sites=40, workers=6,
-                       site_seconds=45, control=lambda: None, progress=lambda event: None):
+                       site_seconds=45, control=lambda: None, progress=lambda event: None, request=None):
     """Search, then prove each site by crawling it. Returns (hospitals, rejected, notes)."""
     notes, results, searched = [], [], []
     if names:  # named hospitals: look them up, do not browse a city list
         planned = [q for n in names for q in (f"{n} official website", f"{n} find a doctor")]
     else:
-        planned = site_queries(kind, location, target, queries)
+        places = (request.places if request is not None else []) or [location]
+        per_place = [site_queries(kind, p, target, queries) for p in places]
+        # Interleave so every place gets searched before the budget runs out.
+        planned = list(dict.fromkeys(q for group in zip(*per_place) for q in group))
+        planned += [q for group in per_place for q in group if q not in planned]
 
     def run_search(query):
         control()
@@ -373,7 +393,8 @@ def discover_hospitals(search, make_crawler, want=10, kind="", location="", targ
                 return
             report_counts(f"Reading {host}")
             try:
-                hospital, reject = survey_site(homepage, make_crawler, kind, location, target, budget=site_seconds)
+                hospital, reject = survey_site(homepage, make_crawler, kind, location, target, budget=site_seconds,
+                                              request=request)
             except Exception as exc:
                 hospital, reject = None, Rejected(host, f"Site could not be read: {exc}"[:200])
             with lock:

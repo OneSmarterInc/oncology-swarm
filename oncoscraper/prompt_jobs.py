@@ -149,16 +149,38 @@ class PromptManager:
                 self.wake.wait(2)
                 self.wake.clear()
 
-    def _discover_sites(self, body, search, progress, control):
+    def _discover_sites(self, body, search, progress, control, job_id=""):
         """Find hospitals and their doctor pages by crawling each site."""
-        request = read_request(body.prompt)
+        progress({"phase": "planning", "current": "Reading your request"})
+        config = settings()
+        reader = None
+        if config["ollama_configured"]:
+            # Local model only: the prompt is never sent to a cloud provider just to be read.
+            reader = ModelRouter(self.db, job_id, control)
+            if isinstance(getattr(reader, "config", None), dict):
+                reader.config = {**reader.config, "providers": ["ollama"]}
+        from .understand import understand
+        try:
+            request, read_notes = understand(body.prompt, reader)
+        finally:
+            if reader is not None:
+                reader.close()
         want = min(request.count, body.max_hospitals)
         report = Report(prompt=body.prompt)
+        report.issues.extend(read_notes)
         criteria = [{"id": "institution_type", "requirement": f"{request.kind} hospital",
                      "prompt_quote": request.kind, "applies_to": "institution"}] if request.kind else []
-        if request.location:
-            criteria.append({"id": "location", "requirement": f"Located in {request.location}",
-                             "prompt_quote": request.location, "applies_to": "institution"})
+        if request.places:
+            criteria.append({"id": "location", "requirement": "Located in " + " or ".join(request.places),
+                             "prompt_quote": ", ".join(request.places), "applies_to": "institution"})
+        if request.excluded_locations or request.excluded_names:
+            criteria.append({"id": "exclude", "requirement": "Not " + ", ".join(request.excluded_locations
+                                                                              + request.excluded_names),
+                             "prompt_quote": ", ".join(request.excluded_locations + request.excluded_names),
+                             "applies_to": "institution"})
+        if request.names:
+            criteria.append({"id": "named", "requirement": "Only these hospitals: " + ", ".join(request.names),
+                             "prompt_quote": ", ".join(request.names), "applies_to": "institution"})
         report.plan = {"objective": body.prompt, "target": request.target, "criteria": criteria,
                        "requested_institutions": request.count, "explanation": request.summary(),
                        "request": request.as_dict(), "hospitals": []}
@@ -196,7 +218,7 @@ class PromptManager:
             search, make_crawler, want=want, kind=request.kind, location=request.location,
             target=request.target, names=request.names, max_searches=body.searches,
             workers=body.site_workers, site_seconds=body.site_seconds,
-            control=control, progress=site_progress)
+            control=control, progress=site_progress, request=request)
         report.plan["hospitals"] = [h.as_dict() for h in hospitals]
         report.pages = max(report.pages, sum(h.pages_read for h in hospitals))
         for hospital in hospitals:
@@ -251,7 +273,7 @@ class PromptManager:
                 config = settings()
                 search = CachedSearch(self.db, job_id, config["search_url"], control)
                 if body.engine == "sites":
-                    report = self._discover_sites(body, search, progress, control)
+                    report = self._discover_sites(body, search, progress, control, job_id)
                 else:
                     model = ModelRouter(self.db, job_id, control)
                     fetcher = CachedFetcher(Fetcher(ScrapeConfig(render=body.render, strict_public_network=True,
@@ -318,16 +340,27 @@ class PromptManager:
                 before = len(docs)
                 docs = [d for d in docs if wanted & set(d.get("sub_specialties") or [])]
                 report.issues.append(f"Speciality filter kept {len(docs)} of {before} doctors")
-            location = request.get("location") or ""
-            if location:
-                # Hospital chains list doctors from many cities; drop the ones the site places elsewhere.
+            places = [*(request.get("locations") or ([request["location"]] if request.get("location") else [])),
+                      *(request.get("states") or [])]
+            excluded = request.get("excluded_locations") or []
+            if places or excluded:
+                # Hospital chains list doctors from many cities; keep only the ones in the places asked for.
+                from .understand import STATES
                 from .vocab import CITY_CANON
-                want = CITY_CANON.get(location, location).casefold()
-                keep = [d for d in docs if not d.get("city")
-                        or CITY_CANON.get(d.get("city"), d.get("city")).casefold() == want]
+                wanted = {CITY_CANON.get(c, c).casefold() for c in places}
+                wanted |= {c.casefold() for st in request.get("states") or [] for c in STATES.get(st, [])}
+                if "delhi" in wanted or "new delhi" in wanted:
+                    wanted |= {"delhi", "new delhi"}
+                skip = {CITY_CANON.get(c, c).casefold() for c in excluded}
+
+                def in_place(d):
+                    city = CITY_CANON.get(d.get("city"), d.get("city") or "").casefold()
+                    return not city or ((not wanted or city in wanted) and city not in skip)
+                keep = [d for d in docs if in_place(d)]
                 if len(keep) < len(docs):
+                    where = " / ".join(places) if places else "the places you asked for"
                     report.issues.append(f"{len(docs) - len(keep)} doctors the hospital site places outside "
-                                         f"{location} were left out")
+                                         f"{where} were left out")
                 docs = keep
             self.update(job_id, phase="filtering")
             filtered, audit = filter_records(report, docs, model or ModelRouter(self.db, job_id, control)
