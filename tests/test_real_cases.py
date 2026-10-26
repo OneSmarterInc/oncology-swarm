@@ -234,3 +234,68 @@ def test_fortis_variant_merge_with_different_profile_paths():
     m.add(card)
     m.add(profile)
     assert len(m.records) == 1
+
+
+def _named(name, url, page_type="profile", hospital="Fortis Escorts Hospital, Jaipur"):
+    r = DoctorRecord(source_url=url, profile_url=url if page_type == "profile" else None, page_type=page_type)
+    r.set("name", name, "h1", name, url)
+    r.set("hospital", hospital, "patterns", hospital, url)
+    r.set("city", "Jaipur", "patterns", "Jaipur", url)
+    return r
+
+
+def test_acronym_glued_to_several_names_is_stripped_sitewide():
+    from oncoscraper.name_suffix import strip_shared_name_suffix, trailing_acronym
+    assert trailing_acronym("Dr. Jyoti Anand MHRC") == "MHRC"
+    assert trailing_acronym("Dr. Jyoti ANAND") is None          # a surname in caps
+    assert trailing_acronym("DR. JYOTI ANAND MHRC") is None      # whole name in caps
+    assert trailing_acronym("Dr. Jyoti Anand MBBS") is None      # a degree, handled elsewhere
+    assert trailing_acronym("Dr. Jyoti Anand III") is None
+    recs = [_named("Dr. Jyoti Anand MHRC", "https://h.example/doctors", "listing"),
+            _named("Dr. Ravi Kumar MHRC", "https://h.example/doctors", "listing"),
+            _named("Dr. Suma Reddy MHRC", "https://h.example/doctors", "listing")]
+    assert strip_shared_name_suffix(recs) == {"MHRC": 3}
+    assert [r.get("name") for r in recs] == ["Dr. Jyoti Anand", "Dr. Ravi Kumar", "Dr. Suma Reddy"]
+
+
+def test_single_all_caps_surname_is_not_an_acronym():
+    from oncoscraper.name_suffix import strip_shared_name_suffix
+    recs = [_named("Dr. Jyoti Anand MHRC", "https://h.example/doctors", "listing")]
+    assert strip_shared_name_suffix(recs) == {}
+    assert recs[0].get("name") == "Dr. Jyoti Anand MHRC"
+    # Two REDDYs in caps next to a mixed-case Reddy: a family name, not an affiliation.
+    recs = [_named("Dr. Ravi Kumar REDDY", "https://h.example/a"), _named("Dr. Suma Rani REDDY", "https://h.example/b"),
+            _named("Dr. Anil Reddy", "https://h.example/c")]
+    assert strip_shared_name_suffix(recs) == {}
+
+
+def test_card_with_acronym_merges_with_clean_profile_after_crawl(site_url, monkeypatch, tmp_path):
+    from oncoscraper.crawl import Crawler
+    from oncoscraper.config import ScrapeConfig
+    from oncoscraper.models import Page
+    import oncoscraper.crawl as crawl_mod
+    base = "https://acr.example"
+    pages = {
+        f"{base}/doctors": "<h1>Our Doctors</h1>" + "".join(
+            f'<div class="card"><h3>Dr. {n} MHRC</h3><p>Consultant Medical Oncology</p></div>'
+            for n in ("Jyoti Anand", "Ravi Kumar", "Suma Rani")) +
+            '<a href="/doctor/jyoti-anand">Profile</a>',
+        f"{base}/doctor/jyoti-anand": "<h1>Dr. Jyoti Anand</h1><p>Consultant Medical Oncology</p>"
+                                       "<p>Email: jyoti.anand@acr.example</p>",
+    }
+
+    class FakeFetcher:
+        requests_made = 0
+        def __init__(self, cfg): pass
+        def get(self, url, **kw):
+            html = pages.get(url.rstrip("/"))
+            return Page(url, url, 200 if html else 404, f"<html><body>{html}</body></html>" if html else "")
+        def close(self): pass
+        def allowed(self, url): return True
+
+    monkeypatch.setattr(crawl_mod, "Fetcher", FakeFetcher)
+    result = Crawler(ScrapeConfig(delay_seconds=0, render="never", use_sitemaps=False, max_pages=10)).run([f"{base}/doctors"])
+    names = sorted(d.get("name") for d in result.doctors)
+    assert names == ["Dr. Jyoti Anand", "Dr. Ravi Kumar", "Dr. Suma Rani"], names
+    jyoti = next(d for d in result.doctors if d.get("name") == "Dr. Jyoti Anand")
+    assert jyoti.page_type == "profile" and jyoti.get("email") == "jyoti.anand@acr.example"

@@ -20,6 +20,7 @@ from .extract import extract_page
 from .fetch import Fetcher, normalize_url
 from . import oncology
 from .models import DoctorRecord, PageResult
+from .name_suffix import strip_shared_name_suffix
 from .profile import clean_fields
 from .vocab import LINK_TEXT_HINTS, LISTING_URL_HINTS, ONCO_URL_HINTS, PAGINATION_RE, PROFILE_URL_HINTS, SKIP_URL
 
@@ -342,6 +343,13 @@ class Crawler:
         finally:
             self.fetcher.close()
         result.doctors = self.merger.records
+        if strip_shared_name_suffix(result.doctors):
+            # 'Dr. Jyoti Anand IOSPL' (card) and 'Dr. Jyoti Anand' (profile) only meet once the acronym is gone.
+            remerge = Merger()
+            for d in result.doctors:
+                remerge.add(d)
+            self.merger = remerge
+            result.doctors = remerge.records
         for d in result.doctors:  # merged records: check the final title once more
             clean_fields(d)
             oncology.veto(d)
