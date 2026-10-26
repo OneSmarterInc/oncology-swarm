@@ -246,7 +246,20 @@ def resolve(
         conn, district=district, discipline=discipline,
         missing_website=True, limit=limit,
     )
-    report = {"attempted": 0, "resolved": 0, "unresolved": [], "accepted": [], "review": []}
+    report = {"attempted": 0, "resolved": 0, "unresolved": [], "accepted": [],
+              "review": [], "shared": []}
+
+    # A trust that runs several colleges outranks each of them in search, so
+    # sibling institutions resolve to the same parent domain. Accepting both
+    # would crawl one site twice and attribute the same staff to two colleges,
+    # which is worse than leaving a row blank. Websites already recorded count
+    # as claimed, so a second run cannot undo the first run's decisions.
+    claimed: dict[str, str] = {
+        row["website"]: row["name"]
+        for row in conn.execute(
+            "SELECT name, website FROM institutions WHERE website IS NOT NULL AND website != ''"
+        )
+    }
 
     for row in rows:
         report["attempted"] += 1
@@ -279,12 +292,19 @@ def resolve(
             elif verdict.error:
                 model_note = f" (model unavailable: {verdict.error})"
 
+        owner = claimed.get(best.url) if best else None
+        if owner and owner != row["name"]:
+            report["shared"].append((row["name"], best.url, owner))
+            best = None
+            why = f"shared domain, already claimed by {owner[:45]}"
+
         if best:
             report["resolved"] += 1
             report["accepted"].append(
                 (row["name"], best.url, round(best.score, 2),
                  "; ".join(best.reasons) + model_note)
             )
+            claimed[best.url] = row["name"]
             if not dry_run:
                 registry.set_website(
                     conn, row["aicte_id"], best.url,
@@ -409,6 +429,10 @@ def main() -> None:
             print(f"         {aicte_id}")
         print("\n  To accept one:")
         print(f"    python tools\\{Path(__file__).name} --db {args.db} --accept <aicte-id> <url>")
+    if report.get("shared"):
+        print("\n  Shared domain, left blank so one site is not crawled twice:")
+        for name, url, owner in report["shared"]:
+            print(f"  =    {name[:40]:40}  {url:38}  held by {owner[:30]}")
     if report["unresolved"]:
         print()
         for name, why in report["unresolved"]:
