@@ -28,6 +28,12 @@ BADNAME = re.compile(
 )
 
 
+NAME_SUFFIX = re.compile(
+    r",?\s+(?:P\.?C\.?|P\.?A\.?|L\.?L\.?P\.?|P\.?L\.?L\.?C\.?|L\.?L\.?C\.?|L\.?P\.?A\.?|A\.?P\.?C\.?|"
+    r"C\.?P\.?A\.?|M\.?B\.?A\.?|L\.?L\.?M\.?|M\.?P\.?H\.?|M\.?H\.?A\.?|M\.?S\.?N\.?|B\.?S\.?N\.?|"
+    r"Ph\.?D\.?|M\.?D\.?|CIPP(?:/[A-Z]+)?|CHC|CHPC|FACHE)(?=[\s,.]|$).*$",
+)
+
 # Page purpose is stronger evidence than title capitalization.
 NON_PERSON_PATH = re.compile(
     r"/(?:services|products-services|practice-areas|practices|locations|offices|news|news-analysis|insights|publications|events|about|about-our-firm)(?:/|$)|"
@@ -75,6 +81,10 @@ def clean_name(value: str) -> str:
     value = re.sub(
         r",?\s+(?:Esq\.?|J\.?D\.?|R\.?N\.?).*$", "", value, flags=re.I
     ).strip()
+    # Credentials and firm-entity suffixes glued after the name: "Jane Smith PLLC", "John Doe, P.C.",
+    # "Mary Brown CPA, MBA". Everything from the first such token on is not part of the name.
+    value = re.sub(NAME_SUFFIX, "", value).strip(" ,")
+    value = re.sub(r",\s+(?=(?:Jr|Sr|II|III|IV)\.?$)", " ", value)  # "Jane Smith, Jr." stays one person
     if value.casefold() in {
         "affordable housing",
         "fraud alert",

@@ -187,3 +187,35 @@ def test_legacy_name_only_duplicates_hidden_but_reviews_preserved(tmp_path):
             (rid, p["key"], "needs_review", "Keep for investigation", "2026-10-24"),
         )
     assert len(store.records(rid)) == 1
+
+
+def test_glued_credentials_and_entity_suffixes_leave_the_name():
+    from attorneyscraper.extract import clean_name
+
+    assert clean_name("John Doe, P.C.") == "John Doe"  # was dropped entirely
+    assert clean_name("Jane Smith PLLC") == "Jane Smith"
+    assert clean_name("Jane Smith CPA, MBA") == "Jane Smith"
+    assert clean_name("Mary Brown, LL.M.") == "Mary Brown"
+    assert clean_name("Jane Smith, Jr.") == "Jane Smith Jr."  # generational suffix is part of the name
+    assert clean_name("Mary Ann Pace") == "Mary Ann Pace"
+    assert clean_name("Pam Pacheco") == "Pam Pacheco"
+
+
+def test_excel_phone_cells_have_no_apostrophe(tmp_path):
+    import io
+
+    from openpyxl import load_workbook
+
+    from attorneyscraper.export import csv_bytes, workbook_bytes
+
+    record = {
+        "name": "Jane Smith", "organization": "Firm", "title": "Attorney", "categories": [], "client_side": [],
+        "contacts": [{"kind": "phone", "value": "+1 212-555-2345", "owner": "individual", "source_url": "u", "evidence": "Direct: 212-555-2345"}],
+        "city": "", "state": "", "profile_url": "https://firm.com/people/jane", "observed_at": "",
+        "evidence_urls": [], "evidence": [], "status": "confirmed", "is_profile": True, "key": "k",
+        "attorney_evidence": [], "classification_evidence": {}, "automatic_status": "confirmed", "run_id": "r",
+    }
+    ws = load_workbook(io.BytesIO(workbook_bytes([record])))["Attorneys"]
+    row = dict(zip([c.value for c in ws[1]], [c.value for c in ws[2]]))
+    assert row["Individual phone"] == "+1 212-555-2345"
+    assert "'+1 212-555-2345" in csv_bytes([record]).decode("utf-8-sig")  # CSV keeps the formula guard

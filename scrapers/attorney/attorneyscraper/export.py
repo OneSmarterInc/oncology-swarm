@@ -26,9 +26,14 @@ HEADERS = [
 ]
 
 
-def safe(value):
+def clean_text(value):
     value = str(value if value is not None else "")
-    value = "".join(c for c in value if ord(c) >= 32 or c in "\n\t")
+    return "".join(c for c in value if ord(c) >= 32 or c in "\n\t")
+
+
+def safe(value):
+    """CSV cell: a spreadsheet opening the file must never run page text as a formula."""
+    value = clean_text(value)
     return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
 
 
@@ -81,7 +86,11 @@ def workbook_bytes(records, run=None, pages=(), audit=()):
         ws = book.create_sheet(name)
         ws.append(headers)
         for row in data:
-            ws.append([safe(v) if not isinstance(v, (int, float)) else v for v in row])
+            # Excel cells are typed: text stays text, so "+1 212-555-2345" is written as is.
+            ws.append([clean_text(v) if not isinstance(v, (int, float)) else v for v in row])
+            for cell in ws[ws.max_row]:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    cell.data_type = "s"  # page text is never a formula
         for cell in ws[1]:
             cell.fill = PatternFill("solid", fgColor="173B40")
             cell.font = Font(color="FFFFFF", bold=True)
