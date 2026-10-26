@@ -55,6 +55,22 @@ Rules:
 Number:"""
 
 
+THINK_BLOCK = re.compile(r"<think>.*?</think>", re.S | re.I)
+UNCLOSED_THINK = re.compile(r"<think>.*", re.S | re.I)
+
+
+def _strip_thinking(text: str) -> str:
+    """Drop a reasoning block so its numbers are not mistaken for the answer.
+
+    A closed block is removed. An unclosed one means the model was cut off
+    mid-thought and never answered, so everything from the tag on is dropped
+    and the caller sees an undecided verdict rather than a number lifted out
+    of the model's working.
+    """
+    text = THINK_BLOCK.sub(" ", text)
+    return UNCLOSED_THINK.sub(" ", text).strip()
+
+
 @dataclass
 class Verdict:
     index: int | None          # 1-based pick, or None for "cannot tell"
@@ -88,7 +104,11 @@ def ask(
         ),
         "stream": False,
         "think": False,
-        "options": {"temperature": 0, "num_predict": 8},
+        # qwen3 and its relatives emit a reasoning block before the answer.
+        # Eight tokens is spent entirely inside that block, so the reply comes
+        # back with no answer in it at all. Allow room for the thinking, then
+        # discard it below.
+        "options": {"temperature": 0, "num_predict": 300},
     }).encode()
 
     request = urllib.request.Request(
@@ -100,8 +120,10 @@ def ask(
     except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError) as error:
         return Verdict(None, error=f"{type(error).__name__}")
 
-    # Take the first number in the reply. A model that pads its answer with
-    # reasoning still gets read correctly; one that answers nothing numeric is
+    answer = _strip_thinking(answer)
+
+    # Take the first number in what is left. A model that pads its answer with
+    # a sentence still gets read correctly; one that answers nothing numeric is
     # treated as undecided rather than guessed at.
     match = re.search(r"\d+", answer.strip())
     if not match:
@@ -161,6 +183,9 @@ def self_test() -> None:
         ("9", None, "out of range"),
         ("I am not sure", None, "no number"),
         ("", None, "empty reply"),
+        ("<think>Maybe 1, maybe 3...</think>\n2", 2, "answer after thinking"),
+        ("<think>I should check 1 and 2", None, "cut off mid-thought"),
+        ("<think>option 3 looks right</think>0", None, "thinking then none"),
     ]
     urls = ["https://a.test/", "https://b.test/", "https://c.test/"]
     failures = 0
@@ -183,6 +208,7 @@ def self_test() -> None:
 
 
 def _parse_for_test(answer: str, urls: list[str]) -> Verdict:
+    answer = _strip_thinking(answer)
     match = re.search(r"\d+", answer.strip())
     if not match:
         return Verdict(None, raw=answer[:80], error="no number in reply")
