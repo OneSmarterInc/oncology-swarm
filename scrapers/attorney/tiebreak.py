@@ -206,16 +206,28 @@ def self_test() -> None:
         types.SimpleNamespace(url="https://a.test/", score=2.5),
         types.SimpleNamespace(url="https://b.test/", score=2.5),
     ]
-    import tiebreak as _self
-
-    saved = _self.ask
+    # Patch this module's own global. Importing by name would create a second
+    # module object when the file runs as __main__, leaving break_tie bound to
+    # the real ask() — a test that then passes only on a machine with no model
+    # running, which is exactly how this guard went unexercised.
+    here = globals()
+    saved = here["ask"]
     for bad in (0, -1, 99):
-        _self.ask = lambda *a, _b=bad, **k: Verdict(_b)
+        here["ask"] = lambda *a, _b=bad, **k: Verdict(_b)
         chosen, _verdict = break_tie("X", pair)
         ok = chosen is None
         failures += 0 if ok else 1
         print(f"  {'ok  ' if ok else 'FAIL'} index {bad} rejected")
-    _self.ask = saved
+    here["ask"] = saved
+
+    # The model must not be called at all when only one candidate survives.
+    calls = []
+    here["ask"] = lambda *a, **k: (calls.append(1), Verdict(1))[1]
+    break_tie("X", pair[:1])
+    ok = not calls
+    failures += 0 if ok else 1
+    print(f"  {'ok  ' if ok else 'FAIL'} model not called for a single candidate")
+    here["ask"] = saved
 
     # A single candidate is never sent to the model.
     fake = [types.SimpleNamespace(url="https://only.test/", score=1.0)]
@@ -224,7 +236,7 @@ def self_test() -> None:
     failures += 0 if ok else 1
     print(f"  {'ok  ' if ok else 'FAIL'} single candidate skipped")
 
-    print(f"\n{len(cases) + 4 - failures}/{len(cases) + 4} passed")
+    print(f"\n{len(cases) + 5 - failures}/{len(cases) + 5} passed")
     reachable, note = available()
     print(f"model check: {note}")
 
