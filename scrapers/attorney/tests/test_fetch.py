@@ -142,3 +142,41 @@ def test_robots_question_and_bracket_are_literal():
     assert r.allowed("https://firm.com/findXq=x")
     assert not r.allowed("https://firm.com/[a]")
     assert r.allowed("https://firm.com/a")
+
+
+def test_robots_forbidden_means_no_robots_file():
+    # hccw.com answers 403 to /robots.txt and 200 to the page: RFC 9309 says crawl.
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.path)
+        if req.url.path == "/robots.txt":
+            return httpx.Response(403)
+        return httpx.Response(200, text="<main><h1>Our Attorneys</h1></main>", headers={"content-type": "text/html"})
+
+    f = make(handler)
+    f.wait = lambda s: None
+    assert "Our Attorneys" in f.get("https://firm.com/attorneys/", "firm.com").text
+    assert seen == ["/robots.txt", "/attorneys/"]
+    f.close()
+
+
+def test_requests_carry_browser_headers_and_robots_group_stays_named():
+    from attorneyscraper.fetch import AGENT, HEADERS, Robots
+
+    assert HEADERS["User-Agent"].startswith("Mozilla/5.0") and "Accept-Language" in HEADERS
+    seen = {}
+
+    def handler(req):
+        seen.update(req.headers)
+        return httpx.Response(404)
+
+    f = make(handler)
+    f.wait = lambda s: None
+    with pytest.raises(FetchError, match="HTTP 404"):
+        f.get("https://firm.com/", "firm.com")
+    assert seen["user-agent"] == HEADERS["User-Agent"]
+    # A site that names the bot in robots.txt is still obeyed.
+    policy = Robots("User-agent: *\nAllow: /\nUser-agent: AttorneyResearchBot\nDisallow: /attorneys/")
+    assert AGENT.startswith("AttorneyResearchBot") and not policy.allowed("https://firm.com/attorneys/x")
+    f.close()

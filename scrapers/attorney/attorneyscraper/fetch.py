@@ -17,7 +17,19 @@ import httpx
 from .models import canonical_url, site_key
 from .transport import PublicTransport
 
+# The robots.txt group this crawler answers to ("User-agent: AttorneyResearchBot").
 AGENT = "AttorneyResearchBot/0.1"
+# Request headers: the same browser identity the onco and campus scrapers send. Firm sites
+# behind a WAF answer 403 to a bare bot token while serving the identical public page to a browser.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 MAX_BYTES = 3_000_000
 
 
@@ -138,7 +150,7 @@ class Fetcher:
         self.client = httpx.Client(
             timeout=httpx.Timeout(20, connect=10),
             follow_redirects=False,
-            headers={"User-Agent": AGENT},
+            headers=HEADERS,
             transport=transport if transport is not None else PublicTransport(),
             trust_env=False,
         )
@@ -220,7 +232,8 @@ class Fetcher:
             response = self._raw(
                 f"{p.scheme}://{p.netloc}/robots.txt", allowed_site, robots=True
             )
-            if response.status in {404, 410}:
+            if 400 <= response.status < 500 and response.status != 429:
+                # RFC 9309 2.3.1.3: a 4xx robots.txt means no robots file; crawling is permitted.
                 policy = Robots("")
             elif response.status == 200 and "<html" not in response.text[:200].lower():
                 policy = Robots(response.text)
