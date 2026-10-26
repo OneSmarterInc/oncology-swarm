@@ -239,6 +239,7 @@ def resolve(
     delay: float = 2.0,
     dry_run: bool = False,
     threshold: float = 2.0,
+    use_model: bool = False,
 ) -> dict:
     """Resolve websites for registry rows that have none."""
     rows = registry.query(
@@ -259,12 +260,38 @@ def resolve(
             continue
 
         best, scored, why = pick(results, row["name"], threshold)
+
+        # Where the scorer refused, the question left is which of two plausible
+        # domains belongs to this institution, and that is judgement rather
+        # than arithmetic. A local model may answer it, choosing from the list
+        # the scorer already shortlisted; it can never supply a URL of its own
+        # and its "cannot tell" is respected.
+        model_note = ""
+        if not best and use_model and len(scored) > 1:
+            import tiebreak
+
+            chosen, verdict = tiebreak.break_tie(
+                row["name"], scored, (row.get("district") or "").title()
+            )
+            if chosen:
+                best = chosen
+                model_note = " (model chose between close candidates)"
+            elif verdict.error:
+                model_note = f" (model unavailable: {verdict.error})"
+
         if best:
             report["resolved"] += 1
-            report["accepted"].append((row["name"], best.url, round(best.score, 2), "; ".join(best.reasons)))
+            report["accepted"].append(
+                (row["name"], best.url, round(best.score, 2),
+                 "; ".join(best.reasons) + model_note)
+            )
             if not dry_run:
-                registry.set_website(conn, row["aicte_id"], best.url, "ddgs")
+                registry.set_website(
+                    conn, row["aicte_id"], best.url,
+                    "ddgs+model" if model_note.startswith(" (model chose") else "ddgs",
+                )
         elif scored and scored[0].score >= threshold - 0.9:
+            why = why + model_note
             # Close enough to be worth a human glance rather than a silent drop.
             report["review"].append(
                 (row["aicte_id"], row["name"], scored[0].url, round(scored[0].score, 2), why)
@@ -338,6 +365,8 @@ def main() -> None:
     parser.add_argument("--delay", type=float, default=2.0)
     parser.add_argument("--threshold", type=float, default=2.0)
     parser.add_argument("--dry-run", action="store_true", help="score but write nothing")
+    parser.add_argument("--use-model", action="store_true",
+                        help="let the local Ollama model break ties the scorer refused")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--accept", nargs=2, metavar=("AICTE_ID", "URL"),
                         help="record a website you checked by hand")
@@ -346,6 +375,14 @@ def main() -> None:
     if args.self_test:
         self_test()
         return
+
+    if args.use_model:
+        import tiebreak
+
+        reachable, note = tiebreak.available()
+        print(f"model: {note}")
+        if not reachable:
+            print("  continuing without it; every refusal stands as it is\n")
 
     conn = registry.connect(args.db)
 
@@ -358,7 +395,7 @@ def main() -> None:
     report = resolve(
         conn, district=args.district, discipline=args.discipline,
         limit=args.limit, delay=args.delay, dry_run=args.dry_run,
-        threshold=args.threshold,
+        threshold=args.threshold, use_model=args.use_model,
     )
 
     print(f"attempted {report['attempted']}, resolved {report['resolved']}"
