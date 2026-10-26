@@ -74,6 +74,11 @@ def stopwords() -> set:
     return set(rules().get("stopwords") or _FALLBACK["stopwords"])
 
 
+def service_subdomains() -> set:
+    """Subdomains that serve a function rather than represent the institution."""
+    return set(rules().get("service_subdomains") or [])
+
+
 _WORD = re.compile(r"[a-z0-9]+")
 
 
@@ -172,6 +177,15 @@ def score_candidate(url: str, name: str) -> Candidate | None:
         # An Indian domain is weak evidence on its own, but it is evidence.
         score += weight("indian_domain", 0.4)
         reasons.append("indian domain")
+
+    # An admissions, alumni or webmail subdomain belongs to the institution
+    # but is not its site: crawling applynow.example.edu finds a form, not a
+    # faculty directory. The parent's name still matches, so without this the
+    # service host can outscore the real one.
+    first_label = bare.split(".")[0]
+    if len(bare.split(".")) > 2 and first_label in service_subdomains():
+        score += weight("service_subdomain_penalty", -1.5)
+        reasons.append(f"service subdomain: {first_label}")
 
     # A deep path is a page about the college, not the college's front door.
     depth = len([p for p in parsed.path.split("/") if p])
@@ -366,6 +380,13 @@ def self_test() -> None:
             "AL-AMEEN EDUCATIONAL & MEDICAL FOUNDATION'S COLLEGE OF ENGINEERING",
             ["https://collegedunia.com/alameen", "https://alameencoe.com/"],
             "alameencoe.com",
+        ),
+        (
+            # An admissions subdomain carries the parent's name and so used to
+            # outscore the institution's own site.
+            "BHARATI VIDYAPEETH'S JAWAHARLAL NEHRU INSTITUTE OF TECHNOLOGY",
+            ["https://applynow.bharatividyapeeth.edu/", "https://www.bharatividyapeeth.edu/"],
+            "bharatividyapeeth.edu",
         ),
     ]
     failures = 0
