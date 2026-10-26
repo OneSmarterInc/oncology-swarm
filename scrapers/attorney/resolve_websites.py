@@ -254,6 +254,7 @@ def resolve(
     dry_run: bool = False,
     threshold: float = 2.0,
     use_model: bool = False,
+    progress: bool = True,
 ) -> dict:
     """Resolve websites for registry rows that have none."""
     rows = registry.query(
@@ -275,8 +276,16 @@ def resolve(
         )
     }
 
-    for row in rows:
+    total = len(rows)
+    started = time.time()
+
+    for position, row in enumerate(rows, 1):
         report["attempted"] += 1
+        if progress:
+            done = position - 1
+            rate = (time.time() - started) / done if done else 0
+            left = f", ~{int(rate * (total - done) / 60)} min left" if done >= 3 else ""
+            print(f"  [{position}/{total}{left}] {row['name'][:48]}", flush=True)
         district_hint = (row.get("district") or "").title()
         query = f"{row['name']} {district_hint} official website"
         try:
@@ -327,6 +336,8 @@ def resolve(
                  "; ".join(best.reasons) + model_note)
             )
             claimed[best.url] = row["name"]
+            if progress:
+                print(f"        -> {best.url}", flush=True)
             if not dry_run:
                 registry.set_website(
                     conn, row["aicte_id"], best.url,
@@ -414,6 +425,7 @@ def main() -> None:
     parser.add_argument("--delay", type=float, default=2.0)
     parser.add_argument("--threshold", type=float, default=2.0)
     parser.add_argument("--dry-run", action="store_true", help="score but write nothing")
+    parser.add_argument("--quiet", action="store_true", help="no per-row progress")
     parser.add_argument("--use-model", action="store_true",
                         help="let the local Ollama model break ties the scorer refused")
     parser.add_argument("--self-test", action="store_true")
@@ -445,8 +457,10 @@ def main() -> None:
         conn, district=args.district, discipline=args.discipline,
         limit=args.limit, delay=args.delay, dry_run=args.dry_run,
         threshold=args.threshold, use_model=args.use_model,
+        progress=not args.quiet,
     )
 
+    print()
     print(f"attempted {report['attempted']}, resolved {report['resolved']}"
           f"{' (dry run, nothing written)' if args.dry_run else ''}\n")
     for name, url, score, why in report["accepted"]:
