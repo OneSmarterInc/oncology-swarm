@@ -1,0 +1,30 @@
+{
+  "unit_integration_tests_passed": 153,
+  "real_html_checks": [
+    {
+      "url": "https://www.littler.com/people/nicola-james",
+      "name": "Nicola James",
+      "individual_email_found": true,
+      "published_phones": 2,
+      "individual_phones": 2
+    },
+    {
+      "url": "https://www.littler.com/people/stephan-c-swinkels",
+      "name": "Stephan C. Swinkels",
+      "individual_email_found": true,
+      "published_phones": 1,
+      "individual_phones": 1
+    },
+    {
+      "url": "https://www.littler.com/people/kate-mrkonich-wilson",
+      "name": "Kathryn Mrkonich Wilson",
+      "individual_email_found": true,
+      "published_phones": 1,
+      "individual_phones": 0
+    }
+  ],
+  "directory_false_person_record": false,
+  "production_crawl": "blocked by runtime DNS resolution",
+  "other_sites": "BakerLaw and Fisher Phillips direct requests HTTP 403",
+  "broad_accuracy_percentage": null
+}

@@ -373,6 +373,8 @@ class Store:
         owners = {}
         for (run, key), p in grouped.items():
             for c in p["contacts"]:
+                if c["owner"] != "individual":
+                    continue
                 owners.setdefault(
                     (run, site_key(p["profile_url"]), c["kind"], c["value"]), set()
                 ).add(key)
@@ -381,7 +383,10 @@ class Store:
             for c in p["contacts"]:
                 if (
                     len(
-                        owners[(run, site_key(p["profile_url"]), c["kind"], c["value"])]
+                        owners.get(
+                            (run, site_key(p["profile_url"]), c["kind"], c["value"]),
+                            set(),
+                        )
                     )
                     > 1
                     and c["owner"] == "individual"

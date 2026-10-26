@@ -99,6 +99,9 @@ def main():
                 page.locator("#run-summary .badge.completed").wait_for(timeout=15000)
                 assert page.locator(".crawl-progress").get_attribute("value") == "100"
                 rid = page.evaluate("selectedRun")
+                assert page.evaluate("()=>badge('completed_with_issues').textContent") == 'Completed'
+                assert page.evaluate("()=>badge('completed_with_issues').className") == 'badge completed'
+                checks.append("Legacy completion status uses neutral Completed label")
                 checks.append("URL-only creation and completed progress")
                 # Synthetic progress snapshot checks the UI, not crawler math.
                 page.evaluate(
@@ -167,16 +170,16 @@ def main():
                 page.locator("#source-file").set_input_files(
                     {"name": "old.csv", "mimeType": "text/csv", "buffer": b"old"}
                 )
-                page.wait_for_function("pendingUploads.length===1")
+                page.wait_for_function("()=>pendingUploads.length===1")
                 page.locator("#source-file").set_input_files(
                     {"name": "new.csv", "mimeType": "text/csv", "buffer": b"new"}
                 )
-                page.wait_for_function("pendingUploads.length===2")
+                page.wait_for_function("()=>pendingUploads.length===2")
                 page.evaluate(
                     """()=>pendingUploads[1](new Response(JSON.stringify({sources:[{organization:'New',url:'https://new.example/'}]})))"""
                 )
                 page.wait_for_function(
-                    "uploaded.length===1&&uploaded[0].organization==='New'"
+                    "()=>uploaded.length===1&&uploaded[0].organization==='New'"
                 )
                 page.locator("#new-run").click()
                 page.evaluate(

@@ -28,12 +28,59 @@ BADNAME = re.compile(
 )
 
 
+# Page purpose is stronger evidence than title capitalization.
+NON_PERSON_PATH = re.compile(
+    r"/(?:services|products-services|practice-areas|practices|locations|offices|news|news-analysis|insights|publications|events|about|about-our-firm)(?:/|$)|"
+    r"(?:privacy|legal-notice|service-terms|fraud-alert|information-request|meeting-request|data-protection-policy)",
+    re.I,
+)
+PEOPLE_PATH = re.compile(
+    r"/(?:people|professionals|attorneys|lawyers|team|our-team|bios?|profiles?)(?:/|$)",
+    re.I,
+)
+ROLE = re.compile(
+    r"\b(?:attorney|lawyer|counsel|partner|associate|shareholder|principal)\b", re.I
+)
+
+
+def name_in_url(name, url):
+    slug = re.sub(r"[^a-z]", "", unquote(urlsplit(url).path).casefold())
+    words = name.split()
+    return bool(words) and all(
+        re.sub(r"[^a-z]", "", part.casefold()) in slug for part in (words[0], words[-1])
+    )
+
+
+def link_priority(url, label=""):
+    path = urlsplit(url).path
+    if NON_PERSON_PATH.search(path):
+        return 5 if re.search(r"health|medical|nurse", path, re.I) else 0
+    if PEOPLE_PATH.search(path):
+        return 100 if len(path.rstrip("/").split("/")) <= 2 else 90
+    name = clean_name(label)
+    if name and name_in_url(name, url):
+        return 80
+    if re.search(
+        r"attorneys|professionals|our team|our people|next|page=|page/",
+        label + " " + url,
+        re.I,
+    ):
+        return 60
+    return 1
+
+
 def clean_name(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip()
     value = re.sub(r"^(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)\s+", "", value, flags=re.I)
     value = re.sub(
         r",?\s+(?:Esq\.?|J\.?D\.?|R\.?N\.?).*$", "", value, flags=re.I
     ).strip()
+    if value.casefold() in {
+        "affordable housing",
+        "fraud alert",
+        "intellectual property",
+    }:
+        return ""
     parts = value.split()
     if not 2 <= len(parts) <= 6 or len(value) > 90 or BADNAME.search(parts[0]):
         return ""
@@ -62,13 +109,29 @@ def decode_emails(text: str) -> set[str]:
 
 
 def phone_values(text: str) -> set[str]:
-    return {
+    # Explicit international prefixes only; never guess a country for local numbers.
+    international = set()
+
+    def remove_international(match):
+        raw = match.group()
+        digits = re.sub(r"\D", "", raw)
+        if not digits.startswith("1") and 8 <= len(digits) <= 15:
+            international.add("+" + digits)
+            return " "
+        return raw
+
+    text = re.sub(
+        r"\+[2-9]\d{0,2}(?:[ .()-]*\d){7,13}(?!\d)", remove_international, text
+    )
+    return international | {
         f"+1 {m[1]}-{m[2]}-{m[3]}" + (f" ext {m[4]}" if m[4] else "")
         for m in PHONE.finditer(text)
     }
 
 
 def owned_email(email: str, name: str) -> bool:
+    if len(name.split()) < 2:
+        return False
     local = re.sub(r"[^a-z]", "", email.split("@")[0])
     words = [re.sub(r"[^a-z]", "", w.lower()) for w in name.split()]
     first, last = words[0], words[-1]
@@ -138,7 +201,41 @@ def contacts(
 
     for a in node.select('a[href^="mailto:"],a[href^="tel:"],[data-cfemail]'):
         context = local_context(a)
+        named_call = False
+        if name:
+            parent = a
+            for _ in range(6):
+                if parent is None:
+                    break
+                label = (
+                    parent.get("aria-label", "")
+                    + " "
+                    + parent.get_text(" ", strip=True)
+                )
+                emails = decode_emails(label)
+                tied_email = bool(emails) and all(
+                    owned_email(email, name) for email in emails
+                )
+                if (
+                    len(label) < 500
+                    and not re.search(
+                        r"\b(?:office|fax|assistant|reception|paralegal)\b", label, re.I
+                    )
+                    and (
+                        re.search(
+                            r"\bCall\s+" + re.escape(name.split()[0]) + r"\b",
+                            label,
+                            re.I,
+                        )
+                        or tied_email
+                    )
+                ):
+                    named_call = True
+                    break
+                parent = parent.parent
         raw = unquote(a.get("href", ""))
+        if raw.lower().startswith("mailto:"):
+            raw = raw.split("?", 1)[0]  # CC/BCC/body are not the recipient's address.
         if a.get("data-cfemail"):
             try:
                 b = bytes.fromhex(a["data-cfemail"])
@@ -148,7 +245,7 @@ def contacts(
         for e in decode_emails(raw):
             add("email", e, context or "Published email link")
         for p in phone_values(raw.removeprefix("tel:")):
-            add("phone", p, context or "Published telephone link")
+            add("phone", p, context or "Published telephone link", personal=named_call)
     # Scan individual text blocks, retaining local labels rather than whole-page context.
     for text_node in node.find_all(string=True):
         line = str(text_node).strip()
@@ -208,22 +305,14 @@ def extract(
         except ValueError:
             continue
         label = anchor.get_text(" ", strip=True)
-        priority = (
-            50
-            if clean_name(label)
-            else 20
-            if re.search(
-                r"attorney|people|professional|team|health|medical|nurse|practice|page=|page/",
-                target + " " + label,
-                re.I,
-            )
-            else 1
-        )
+        priority = link_priority(target, label)
         discovered_links[target] = max(priority, discovered_links.get(target, 0))
     page_contacts = []
     office_values, fax_values = set(), set()
     for area in soup.select("header,footer,[role=contentinfo]"):
-        if area.select_one("h1"):
+        if area.select_one("h1") or (
+            area.name == "header" and PEOPLE_PATH.search(urlsplit(url).path)
+        ):
             continue
         page_contacts.extend(contacts(area, "", url, office=True))
     for script in soup.select('script[type="application/ld+json"]'):
@@ -297,13 +386,9 @@ def extract(
         clean_name(a.get_text(" ", strip=True)) for a in main.select("a[href]")
     }
     linked_names.discard("")
-    slug = re.sub(r"[^a-z]", "", urlsplit(url).path.casefold())
 
     def url_matches(name):
-        return all(
-            re.sub(r"[^a-z]", "", part.casefold()) in slug
-            for part in (name.split()[0], name.split()[-1])
-        )
+        return name_in_url(name, url)
 
     if not heads:
         heads = [
@@ -314,7 +399,19 @@ def extract(
         ]
     profile_name = (
         heads[0][1]
-        if heads and (url_matches(heads[0][1]) or len(linked_names - {heads[0][1]}) < 3)
+        if heads
+        and not NON_PERSON_PATH.search(urlsplit(url).path)
+        and (
+            url_matches(heads[0][1])
+            or any(
+                str(p.get("name") or "").casefold() == heads[0][1].casefold()
+                for p in structured
+            )
+            or (
+                len(linked_names - {heads[0][1]}) < 3
+                and ROLE.search(main.get_text(" ", strip=True))
+            )
+        )
         else ""
     )
     candidates = []
@@ -341,6 +438,14 @@ def extract(
                 a = node.select_one("a[href]")
             target = urljoin(url, a["href"]) if a else url
             if not target.startswith(("http://", "https://")):
+                continue
+            if NON_PERSON_PATH.search(urlsplit(target).path):
+                continue
+            if not (
+                name_in_url(name, target)
+                or PEOPLE_PATH.search(urlsplit(target).path)
+                or node.get("itemtype", "").endswith("/Person")
+            ):
                 continue
             candidates.append((name, node, target, {}, False))
         for p in structured:
@@ -397,6 +502,8 @@ def extract(
             target = canonical_url(target)
         except ValueError:
             continue
+        if NON_PERSON_PATH.search(urlsplit(target).path):
+            continue
         key = person_key(name, target)
         if not person:
             person = next(
@@ -438,6 +545,36 @@ def extract(
             for aside in sidebars:
                 if not belongs_to_other_person(aside, name):
                     contact_node.append(BeautifulSoup(str(aside), "html.parser"))
+        extracted_contacts = contacts(contact_node, name, url, person)
+        # A labeled contact block on a single-person profile establishes ownership.
+        # Whole biography text is not a contact block (it can mention other people).
+        if is_profile:
+            for block in contact_node.select(
+                "header,.contact-info,.contact-details,.profile-contact,.person-contact,[itemprop=telephone]"
+            ):
+                block_text = block.get_text(" ", strip=True)
+                if len(block_text) > 700 or belongs_to_other_person(block, name):
+                    continue
+                if re.search(
+                    r"\b(?:office|switchboard|reception|assistant|paralegal|fax)\b",
+                    block_text,
+                    re.I,
+                ):
+                    continue
+                block_phones = phone_values(block_text)
+                for anchor in block.select('a[href^="tel:"]'):
+                    block_phones.update(phone_values(anchor["href"]))
+                if len(block_phones) == 1:
+                    for contact in extracted_contacts:
+                        if (
+                            contact["kind"] == "phone"
+                            and contact["value"] in block_phones
+                            and contact["owner"] == "unassigned"
+                        ):
+                            contact["owner"] = "individual"
+                            contact["ownership_note"] = (
+                                "Published in the named profile contact block"
+                            )
         record = {
             "key": key,
             "name": name,
@@ -450,7 +587,7 @@ def extract(
             "location_source": "source_list" if city or state else "not_published",
             "country": "",
             "country_note": "US-targeted run; location not independently verified",
-            "contacts": contacts(contact_node, name, url, person),
+            "contacts": extracted_contacts,
             "is_profile": is_profile,
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "content_hash": hashlib.sha256(html.encode()).hexdigest(),

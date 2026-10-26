@@ -13,7 +13,6 @@ HEADERS = [
     "Title",
     "Categories",
     "Client side",
-    "Classification",
     "Individual email",
     "Individual phone",
     "Organization email",
@@ -24,7 +23,6 @@ HEADERS = [
     "State",
     "Profile URL",
     "Observed at",
-    "Legacy note",
 ]
 
 
@@ -54,11 +52,6 @@ def rows(records):
             p["title"],
             ", ".join(p["categories"]),
             ", ".join(p["client_side"]),
-            {
-                "confirmed": "Attorney match supported",
-                "needs_review": "Insufficient evidence",
-                "excluded": "Excluded",
-            }.get(p["status"], p["status"]),
             values("individual", "email"),
             values("individual", "phone"),
             values("organization", "email"),
@@ -69,7 +62,6 @@ def rows(records):
             p["state"],
             p["profile_url"],
             p["observed_at"],
-            p.get("review", {}).get("note", ""),
         ]
 
 
@@ -109,13 +101,13 @@ def workbook_bytes(records, run=None, pages=(), audit=()):
         ["Metric", "Value"],
         [
             ("Run", (run or {}).get("name", "Directory")),
-            ("Run status", (run or {}).get("status", "Snapshot")),
-            ("People", len(records)),
-            ("Confirmed", sum(p["status"] == "confirmed" for p in records)),
             (
-                "Insufficient evidence",
-                sum(p["status"] == "needs_review" for p in records),
+                "Run status",
+                "Completed"
+                if (run or {}).get("status") in {"completed", "completed_with_issues"}
+                else (run or {}).get("status", "Snapshot"),
             ),
+            ("People", len(records)),
             (
                 "Individual email",
                 sum(

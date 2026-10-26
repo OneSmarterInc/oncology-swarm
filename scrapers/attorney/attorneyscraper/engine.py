@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from xml.etree import ElementTree as ET
 
-from .extract import extract
+from .extract import extract, link_priority
 from .fetch import Fetcher, FetchError, Stopped
 from .models import RunConfig, canonical_url, site_key
 
@@ -168,13 +168,7 @@ class Manager:
                                     links.append(
                                         {
                                             "url": target,
-                                            "priority": 30
-                                            if re.search(
-                                                r"people|attorney|professional|health",
-                                                target,
-                                                re.I,
-                                            )
-                                            else 2,
+                                            "priority": link_priority(target),
                                         }
                                     )
                         result = {"records": []}
