@@ -78,6 +78,26 @@ class Request:
         return f"{self.count} {what}{where}{named}{spec} -> official {self.target} pages"
 
 
+def _city_any_case(text):
+    """'mumbai' typed in lower case is still Mumbai."""
+    from .vocab import CITY_CANON, INDIAN_CITIES
+    m = re.search(r"\b(" + "|".join(sorted(map(re.escape, INDIAN_CITIES), key=len, reverse=True)) + r")\b", text, re.I)
+    if not m:
+        return ""
+    city = next(c for c in INDIAN_CITIES if c.casefold() == m.group(1).casefold())
+    return CITY_CANON.get(city, city)
+
+
+# Page titles that are slogans or topics, not a hospital's name.
+NOT_A_NAME = re.compile(r"^(?:best|top|leading|largest|no\.?\s*1|india'?s|welcome|home|find|book|search|"
+                        r"comprehensive|about|contact)\b|\b(?:information|emergency rooms|treatment in|"
+                        r"near me|cost of|network)\b", re.I)
+
+
+def _good_name(option):
+    return (4 <= len(option) <= 90 and HOSPITAL_WORDS.search(option) and not NOT_A_NAME.search(option))
+
+
 def read_request(prompt):
     """Read count, hospital type, city, target, specialties and named hospitals from plain words.
 
@@ -97,7 +117,7 @@ def read_request(prompt):
     kind = next((k for k in TYPE_WORDS if re.search(rf"\b{k}\b", low)), "")
     if kind == "oncology":
         kind = "cancer"
-    city = city_from(text) or ""
+    city = city_from(text) or _city_any_case(text)
     if city and names and city.casefold() in " ".join(names).casefold():
         city = ""  # the city appeared only inside a hospital's own name
     count_match = re.search(rf"\b(\d{{1,3}})\s+(?:[\w-]+\s+){{0,2}}?{HOSPITAL_NOUN}", low)
@@ -212,7 +232,7 @@ def read_identity(page):
     name = ""
     for option in candidates:
         option = " ".join(str(option).split()).strip(" ,-|")
-        if 4 <= len(option) <= 90 and (HOSPITAL_WORDS.search(option) or re.search(r"cancer|onco", option, re.I)):
+        if _good_name(option):
             name = option
             break
     for node in soup(["script", "style", "noscript", "svg"]):
@@ -242,7 +262,7 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
     wanted = result.oncologists if target == "oncologists" else result.doctors
     hospital_names = Counter(d.get("hospital") for d in wanted if d.get("hospital"))
     if not name:
-        name = next((n for n, _ in hospital_names.most_common() if HOSPITAL_WORDS.search(str(n))), "")
+        name = next((n for n, _ in hospital_names.most_common() if _good_name(str(n))), "")
     doctor_cities = Counter(d.get("city") for d in wanted if d.get("city"))
 
     # Doctor pages: the listing pages that produced the wanted doctors, best first.
@@ -267,8 +287,9 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
 
     blob = " | ".join(filter(None, [str(name), home_text, *(str(d.get("specialty") or "") for d in result.doctors),
                                     *(str(d.get("department") or "") for d in result.doctors)]))
-    if not name or not (HOSPITAL_WORDS.search(str(name)) or re.search(r"cancer|onco", str(name), re.I)):
-        return None, Rejected(host, "No hospital name found on the site", name, city, pages_read)
+    if not name or not _good_name(str(name)):
+        return None, Rejected(host, "No hospital name found on the site (title is a slogan or topic)",
+                              name, city, pages_read)
     if not doctor_urls:
         who = "oncologists" if target == "oncologists" else "doctors"
         return None, Rejected(host, f"No page on this site listed {who} that the extractor could read",
@@ -282,6 +303,7 @@ def survey_site(homepage, make_crawler, kind="", location="", target="oncologist
         if want.casefold() in stated or in_text:
             # Hospital chains list many cities; the site naming this one is enough to look closer.
             hospital.evidence["location"] = f"{want} read from this site"
+            hospital.city = want  # a chain's home page may name another city first
         elif found:
             return None, Rejected(host, f"Site says {found}, not {want}", name, city, pages_read)
         else:
@@ -357,7 +379,14 @@ def discover_hospitals(search, make_crawler, want=10, kind="", location="", targ
             with lock:
                 counts["checked"] += 1
                 counts["pages"] += hospital.pages_read if hospital else (reject.pages_read if reject else 0)
-                if hospital and len(hospitals) < want:
+                # One hospital on two domains (hcgoncology.com -> hcghospitals.com) is kept once.
+                doctor_hosts = {(urlsplit(u).hostname or "").removeprefix("www.") for u in hospital.doctor_urls} if hospital else set()
+                if hospital and any(doctor_hosts & {(urlsplit(u).hostname or "").removeprefix("www.")
+                                                    for u in h.doctor_urls} or h.name.casefold() == hospital.name.casefold()
+                                    for h in hospitals):
+                    rejected.append(Rejected(host, "Same hospital as one already found", hospital.name, hospital.city,
+                                             hospital.pages_read))
+                elif hospital and len(hospitals) < want:
                     hospitals.append(hospital)
                 elif reject:
                     rejected.append(reject)

@@ -355,3 +355,26 @@ def test_personal_links_and_patient_stories():
         "https://www.linkedin.com/in/meera-kapoor-onco", "https://scholar.google.com/citations?user=AbC123xyz"]
     assert by_name["Dr. Arjun Sethi"].get("research_links") == ["https://orcid.org/0000-0002-1825-0097"]
     assert not any("company" in str(d.get("research_links")) for d in result.doctors)
+
+
+# ---- regressions from the first live run ("find the cancer hospitals in mumbai and their urls") ----
+
+def test_lower_case_city_is_still_a_location_filter():
+    assert read_request("find the cancer hospitals in mumbai and their urls").location == "Mumbai"
+    assert read_request("cancer hospitals in bangalore").location == "Bengaluru"
+
+
+@pytest.mark.parametrize("url", ["https://doctor.webmd.com/providers/specialty/oncology/new-york/new-york",
+                                 "https://cancerfax.com/", "https://www.cancer.gov/", "https://ccr.cancer.gov/x"])
+def test_doctor_finders_tourism_agents_and_research_sites_are_not_sources(url):
+    assert exclusion_reason(url)
+
+
+@pytest.mark.parametrize("title,ok", [("Best Cancer Hospital in India for Cancer Treatment", False),
+                                      ("India's Largest Dedicated Cancer Hospital Network", False),
+                                      ("Comprehensive Cancer Information", False),
+                                      ("Florida Hospitals and Emergency Rooms", False),
+                                      ("Tata Memorial Centre", True), ("Kokilaben Dhirubhai Ambani Hospital", True)])
+def test_slogans_are_not_hospital_names(title, ok):
+    from oncoscraper.site_discovery import _good_name
+    assert bool(_good_name(title)) is ok

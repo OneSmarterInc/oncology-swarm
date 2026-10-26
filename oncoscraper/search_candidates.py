@@ -18,6 +18,13 @@ AGGREGATOR_HOSTS = (
     "mfine.co", "tata1mg.com", "1mg.com", "pristyncare.com", "medicoverhospitals.in.reviews",
     "zoom-hospitals.com", "hospitalsinindia.co", "drlogy.com", "kivihealth.com", "joonsquare.com",
     "sulekha.com", "magicpin.in", "google.com", "maps.google.com",
+    # Doctor finders, ratings and medical-tourism agents: they list other hospitals' doctors.
+    "webmd.com", "healthgrades.com", "vitals.com", "zocdoc.com", "ratemds.com", "doximity.com",
+    "cancerfax.com", "lyfboat.com", "medmonks.com", "indiamedtrip.com", "medicaltourismco.com",
+    "placidway.com", "bookimed.com", "mediglobus.com", "airrova.com", "doctoriduniya.com", "myupchar.com",
+    "healthline.com", "mayoclinic.org", "clevelandclinic.org",
+    # Research and information sites, not hospitals.
+    "cancer.gov", "nih.gov", "cancer.org", "who.int", "medlineplus.gov",
 )
 
 
