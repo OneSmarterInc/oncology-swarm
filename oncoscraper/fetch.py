@@ -59,6 +59,12 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, host + port, path, query, ""))
 
 
+def _is_dns_failure(text: str) -> bool:
+    """The hostname does not exist: no client, browsers included, can reach it."""
+    return bool(re.search(r"name or service not known|err_name_not_resolved|errno 11001|"
+                          r"nodename nor servname|no address associated|getaddrinfo failed", text or "", re.I))
+
+
 def _is_ssl_or_proxy(exc: Exception) -> bool:
     text = f"{type(exc).__name__} {exc}".lower()
     return any(k in text for k in ("certificate", "ssl", "proxy", "tls", "handshake"))
@@ -99,6 +105,7 @@ class Fetcher:
             },
             max_redirects=5,
             verify=_ssl_verify(),
+            event_hooks={"request": [self._guard_request]} if config.strict_public_network else None,
         )
         self._robots: dict[str, RobotsPolicy] = {}
         self.robots_status: dict[str, str] = {}
@@ -107,7 +114,15 @@ class Fetcher:
         self._renderer = None
         self._renderer_error: str | None = None
         self.browser_hosts: set[str] = set()   # sites that only answer real browsers
+        self._dead_hosts: set[str] = set()     # hostnames DNS cannot resolve; each fails once, then instantly
+        self._successful_hosts: set[str] = set()
         self.requests_made = 0
+
+    def _guard_request(self, request):
+        """Prompt discovery visits sites nobody typed in: check DNS and every redirect."""
+        if not self.cfg.allow_private_hosts:
+            from .network_guard import public_destination
+            public_destination(request.url)
 
     def close(self) -> None:
         self.client.close()
@@ -153,7 +168,15 @@ class Fetcher:
         except httpx.HTTPError as exc:
             log.warning("robots.txt unavailable to plain HTTP for %s: %s", origin, exc)
             self.robots_status[origin] = f"unreachable to plain HTTP ({type(exc).__name__}), no rules"
-            if self._browser_ok():
+            if self.cfg.strict_public_network and "refused" in str(exc).lower():
+                policy = RobotsPolicy("User-agent: *\nDisallow: /", self.cfg.user_agent)
+                self.robots_status[origin] = "refused by the network guard; automatic discovery treats this site as closed"
+                self._robots[origin] = policy
+                return policy
+            if _is_dns_failure(str(exc)) and urlsplit(origin).netloc not in self._successful_hosts:
+                self._dead_hosts.add(urlsplit(origin).netloc)
+                self.robots_status[origin] = "hostname does not exist (DNS lookup failed)"
+            elif self._browser_ok():
                 # Plain HTTP cannot connect (certificate, proxy or firewall); read it the way Chrome does.
                 b = self._browser_get(origin + "/robots.txt", expand=False)
                 if b is not None:
@@ -210,6 +233,14 @@ class Fetcher:
             self.check_allowed(url)
         except FetchBlocked as exc:
             return Page(url, url, 0, "", error=str(exc))
+        if urlsplit(url).netloc in self._dead_hosts:
+            return Page(url, url, 0, "", error="hostname does not exist (DNS lookup failed)")
+        if self.cfg.strict_public_network and not self.cfg.allow_private_hosts:
+            from .network_guard import public_destination
+            try:
+                public_destination(url)
+            except httpx.HTTPError as exc:
+                return Page(url, url, 0, "", error=str(exc)[:200])
         if urlsplit(url).netloc in self.browser_hosts:
             return self._via_browser(url, url, 0, "")
         last_error = None
@@ -218,6 +249,12 @@ class Fetcher:
                 resp = self._raw_get(url)
             except httpx.HTTPError as exc:
                 last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+                host = urlsplit(url).netloc
+                if _is_dns_failure(last_error) and host not in self._successful_hosts:
+                    self._dead_hosts.add(host)
+                    return Page(url, url, 0, "", error="hostname does not exist (DNS lookup failed)")
+                if "Discovered URL refused" in last_error:
+                    return Page(url, url, 0, "", error=last_error)
                 if _is_ssl_or_proxy(exc):
                     break  # retrying the same client will not help
                 time.sleep(min(10, 2 ** attempt))
@@ -227,6 +264,9 @@ class Fetcher:
                 time.sleep(min(30, float(retry_after)) if retry_after.isdigit() else 2 ** (attempt + 1))
                 continue
             final = normalize_url(str(resp.url))
+            self._successful_hosts.add(urlsplit(url).netloc)
+            if self.cfg.strict_public_network and len(resp.content) > self.cfg.max_bytes:
+                return Page(url, final, resp.status_code, "", "", error="Page exceeds response size limit; coverage is incomplete")
             ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
             if resp.status_code in BLOCK_CODES or (400 <= resp.status_code < 500 and resp.status_code not in (404, 410)):
                 # Firewall refuses non-browser clients (common on large hospital sites).

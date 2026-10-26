@@ -169,7 +169,7 @@ def _pause(job, paused: bool) -> dict:
 
 @app.get("/static/{name}.js")
 def static_js(name: str):
-    if name not in ("app", "portal"):
+    if name not in ("app", "portal", "prompt"):
         raise HTTPException(404, "not found")
     return Response((STATIC / f"{name}.js").read_text(encoding="utf-8"), media_type="application/javascript",
                     headers={"Cache-Control": "no-cache"})
@@ -528,6 +528,18 @@ def run_detail(run_id: str):
 
 @app.delete("/api/runs/{run_id}")
 def run_delete(run_id: str):
+    if (store().get_run(run_id) or {}).get("kind") == "prompt":
+        manager = prompt_manager()
+        saved = manager.db.get(run_id)
+        from .prompt_jobs import ACTIVE
+        if saved and saved["state"] in ACTIVE:
+            raise HTTPException(409, "Stop the prompt run before deleting it")
+        manager.db.delete(run_id)
+        # Exact job-owned files only; never follow a filename supplied by a client.
+        import shutil
+        shutil.rmtree(OUT_DIR / f"prompt-{run_id}-raw_sites", ignore_errors=True)
+        for suffix in (".xlsx", "-raw.xlsx", "-sources.xlsx"):
+            (OUT_DIR / f"prompt-{run_id}{suffix}").unlink(missing_ok=True)
     if _live_state(run_id) in ("running", "paused"):
         raise HTTPException(409, "Stop the run before deleting it")
     store().delete_run(run_id)
@@ -536,6 +548,10 @@ def run_delete(run_id: str):
 
 @app.get("/api/runs/{run_id}/download.{fmt}")
 def run_download(run_id: str, fmt: str):
+    if (store().get_run(run_id) or {}).get("kind") == "prompt" and fmt == "xlsx":
+        job = prompt_manager().db.get(run_id)
+        if job and job.get("xlsx") and Path(job["xlsx"]).is_file():
+            return prompt_download(run_id)
     if run_id in JOBS:
         return download(run_id, fmt)
     if run_id in BATCHES and fmt == "xlsx":
@@ -580,6 +596,8 @@ def run_resume(run_id: str):
     if _live_state(run_id) in ("running", "paused"):
         raise HTTPException(409, "This run is still going")
     r = store().get_run(run_id) or _missing("run")
+    if r["kind"] == "prompt":
+        return prompt_action(run_id, "resume")
     if r["kind"] != "batch":
         raise HTTPException(400, "Only hospital-list batches can be resumed; use Run again for a single website")
     name, data = store().upload_of(run_id)
@@ -634,3 +652,103 @@ def directory_download(fmt: str, q: str = "", city: str = "", hospital: str = ""
 @app.get("/api/dashboard")
 def dashboard():
     return store().dashboard()
+
+
+# Prompt discovery is isolated from upload/single-site jobs, and shares their
+# extraction engine and final history only after filtering is complete.
+_PROMPT_MANAGER = None
+_PROMPT_LOCK = threading.RLock()
+
+
+def prompt_manager():
+    global _PROMPT_MANAGER
+    from .discovery_services import DiscoveryDB
+    from .prompt_jobs import PromptManager
+    with _PROMPT_LOCK:
+        history = store()
+        path = history.path.with_name("prompt-discovery.db")
+        if _PROMPT_MANAGER is None or _PROMPT_MANAGER.db.path != path:
+            if _PROMPT_MANAGER is not None:
+                _PROMPT_MANAGER.close()
+            _PROMPT_MANAGER = PromptManager(DiscoveryDB(path), history, OUT_DIR)
+            _PROMPT_MANAGER.start_worker()
+        return _PROMPT_MANAGER
+
+
+from .prompt_jobs import PromptIn  # noqa: E402 - keep the workflow separate from legacy endpoints
+
+
+@app.get("/api/discovery/config")
+def prompt_config():
+    from .discovery_services import settings
+    config = settings()
+    config["ready"] = config["ollama_configured"] or config["groq_configured"] or config["gemini_configured"]
+    # This is configuration presence, not a claim that the remote APIs are healthy.
+    return config
+
+
+@app.post("/api/discovery")
+def prompt_start(body: PromptIn):
+    from .discovery_services import ConfigurationError
+    try:
+        job = prompt_manager().create(body)
+    except ConfigurationError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"id": job["id"], "state": job["state"]}
+
+
+@app.get("/api/discovery")
+def prompt_list():
+    return {"jobs": [{k: j.get(k) for k in ("id", "state", "phase", "started", "finished", "body")}
+                     for j in prompt_manager().db.jobs()]}
+
+
+@app.get("/api/discovery/{job_id}")
+def prompt_status(job_id: str):
+    manager = prompt_manager()
+    job = manager.db.get(job_id) or _missing("prompt run")
+    job["download_ready"] = bool(job.get("xlsx") and Path(job["xlsx"]).is_file())
+    job.pop("xlsx", None)
+    job["usage"] = manager.db.stats(job_id) or job.get("usage", [])
+    return job
+
+
+@app.get("/api/discovery/{job_id}/download.xlsx")
+def prompt_download(job_id: str):
+    job = prompt_manager().db.get(job_id) or _missing("prompt run")
+    if not job.get("xlsx") or not Path(job["xlsx"]).is_file():
+        raise HTTPException(409, "The filtered Excel is not ready. Check the run stage; progress is saved")
+    path = Path(job["xlsx"])
+    return FileResponse(path, filename=path.name, media_type=XLSX)
+
+
+@app.get("/api/discovery/{job_id}/sources.xlsx")
+def prompt_sources(job_id: str):
+    from .prompt_jobs import export_sources
+    job = prompt_manager().db.get(job_id) or _missing("prompt run")
+    if not job.get("report", {}).get("candidates"):
+        raise HTTPException(409, "No hospital pages found yet")
+    path = export_sources(job, OUT_DIR / f"prompt-{job_id}-sources.xlsx")
+    return FileResponse(path, filename=path.name, media_type=XLSX)
+
+
+@app.get("/api/discovery/{job_id}/evidence.json")
+def prompt_evidence(job_id: str):
+    import json
+    manager = prompt_manager()
+    job = manager.db.get(job_id) or _missing("prompt run")
+    return Response(json.dumps({"job": {key: job.get(key) for key in ("id", "state", "phase", "error", "retry_at", "progress")},
+                                "report": job["report"], "filter_decisions": manager.db.cached(job_id, "filter_audit") or [],
+                                "usage": manager.db.stats(job_id) or job.get("usage", [])}, ensure_ascii=False), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="prompt-{job_id}-evidence.json"'})
+
+
+@app.post("/api/discovery/{job_id}/{action}")
+def prompt_action(job_id: str, action: str):
+    try:
+        job = prompt_manager().action(job_id, action)
+    except KeyError:
+        raise HTTPException(404, "Prompt run not found") from None
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"id": job_id, "state": job["state"], "kind": "prompt"}

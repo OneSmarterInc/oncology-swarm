@@ -50,14 +50,15 @@ async function loadRuns() {
   const r = await api('/api/runs');
   if (!r.ok) { say($('r-msg'), r.error, 'bad'); return; }
   $('r-rows').innerHTML = r.data.runs.map(x => {
-    const live = x.state === 'running' || x.state === 'paused';
+    const live = x.kind === 'prompt' ? ['queued','running','waiting','pausing','stopping'].includes(x.state) : (x.state === 'running' || x.state === 'paused');
     const acts = [];
     if (live) acts.push(`<button data-act="open" data-id="${x.id}" data-kind="${x.kind}">Open</button>`);
     acts.push(`<button class="secondary" data-act="dl" data-id="${x.id}">Excel</button>`);
+    if (!live && x.kind === 'prompt' && ['paused','stopped','interrupted','waiting','failed'].includes(x.state)) acts.push(`<button data-act="resume" data-id="${x.id}">Resume</button>`);
     if (!live && x.kind === 'batch' && x.has_upload && x.state !== 'done') acts.push(`<button data-act="resume" data-id="${x.id}">Resume</button>`);
     if (!live && x.kind === 'crawl') acts.push(`<button class="secondary" data-act="rerun" data-id="${x.id}">Run again</button>`);
     if (!live) acts.push(`<button class="secondary" data-act="del" data-id="${x.id}">${armed.has(x.id) ? 'Click again to delete' : 'Delete'}</button>`);
-    return `<tr><td>${fmtTime(x.started)}</td><td>${x.kind === 'batch' ? 'Hospital list' : 'One website'}</td><td>${esc(x.title)}</td>
+    return `<tr><td>${fmtTime(x.started)}</td><td>${x.kind === 'batch' ? 'Hospital list' : x.kind === 'prompt' ? 'Prompt' : 'One website'}</td><td>${esc(x.title)}</td>
       <td>${stateCell(x.state)}${x.error ? `<div class="muted">${esc(x.error)}</div>` : ''}</td><td>${fmtDur(x.started, live ? null : x.finished)}</td>
       <td>${x.oncologists_saved}</td><td class="actions">${acts.join('')}</td></tr>`;
   }).join('') || `<tr><td colspan="7" class="empty">No runs yet. Start one under <a href="#new">New run</a>.</td></tr>`;
@@ -65,7 +66,7 @@ async function loadRuns() {
 $('r-rows').onclick = async e => {
   const b = e.target.closest('button[data-act]'); if (!b) return;
   const id = b.dataset.id, act = b.dataset.act;
-  if (act === 'open') { location.hash = '#new'; b.dataset.kind === 'batch' ? attachBatch(id) : attachJob(id); return; }
+  if (act === 'open') { location.hash = '#new'; b.dataset.kind === 'batch' ? attachBatch(id) : b.dataset.kind === 'prompt' ? attachPrompt(id) : attachJob(id); return; }
   if (act === 'dl') { download(`/api/runs/${id}/download.xlsx`, $('r-msg'), b); return; }
   if (act === 'del') {
     if (!armed.has(id)) { armed.add(id); b.textContent = 'Click again to delete'; setTimeout(() => armed.delete(id), 5000); return; }
@@ -77,6 +78,7 @@ $('r-rows').onclick = async e => {
   b.disabled = false;
   if (!r.ok) { say($('r-msg'), r.error, 'bad'); return; }
   location.hash = '#new';
+  if (r.data.kind === 'prompt') { attachPrompt(id); return; }
   if (act === 'resume') { say($('b-msg'), `Resumed: finished hospitals are kept, ${r.data.hospitals} in the list.`, 'ok'); attachBatch(r.data.id); }
   else { showRows([], 'this website crawl'); attachJob(r.data.id); }
 };

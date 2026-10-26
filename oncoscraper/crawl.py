@@ -162,6 +162,7 @@ class Crawler:
                  stop_event: threading.Event | None = None, pause_event: threading.Event | None = None):
         self.cfg = cfg.validate()
         self.pause_event = pause_event or threading.Event()  # set = paused
+        self.deadline: float | None = None  # wall-clock limit used when prompt discovery checks a site
         self.fetcher = Fetcher(cfg)
         self.progress = progress or (lambda e: None)
         self.stop_event = stop_event or threading.Event()
@@ -280,6 +281,8 @@ class Crawler:
         counts = {"profile": 0, "listing": 0, "other": 0, "error": 0}
         try:
             while self._frontier and fetched < self.cfg.max_pages and not self.stop_event.is_set():
+                if self.deadline and time.time() >= self.deadline:
+                    break
                 if self.cfg.stale_pages and stale >= self.cfg.stale_pages and self.merger.records:
                     # The best pages are crawled first; this many empty pages in a row means the
                     # doctor pages are done. Stop early instead of using the rest of the budget.
@@ -305,11 +308,14 @@ class Crawler:
                 result.pages.append(PageLog(page.final_url, page.status, pr.page_type, len(pr.doctors), depth, note))
                 start = next((s for s in starts if same_site(page.final_url, s, self.cfg.include_subdomains)), starts[0])
                 page_onco = bool(ONCO_URL_HINTS.search(urlsplit(page.final_url).path)) or any(d.is_oncology for d in pr.doctors) or from_onco
-                stale = 0 if pr.doctors else stale + 1
+                # Patience counts pages that taught us nothing: no new doctor and no newly filled field.
+                before = (len(self.merger.records), sum(len(r.filled_fields()) for r in self.merger.records))
                 for rec in pr.doctors:
                     merged = self.merger.add(rec)
                     if merged.is_oncology and merged.profile_url:
                         self._onco_profile_urls.add(normalize_url(merged.profile_url))
+                after = (len(self.merger.records), sum(len(r.filled_fields()) for r in self.merger.records))
+                stale = 0 if after != before else stale + 1
                 # Follow links.
                 if pr.page_type != "error":
                     for d in pr.doctors:

@@ -11,13 +11,15 @@ from .dom import text_lines
 from .fetch import normalize_url
 from .models import DoctorRecord
 from .profile import (
-    assign_emails, assign_phones,     city_from, find_name_in_text, parse_experience, parse_qualifications, plain_person_name,
+    PERSONAL_LINK, assign_emails, assign_phones, city_from, personal_links, find_name_in_text, parse_experience, parse_qualifications, plain_person_name,
     qualification_line, split_designation, sub_specialties,
 )
 from .vocab import HOSPITAL_WORDS, LANG_RE, NAME_RE, PROFILE_URL_HINTS, label_field
 
 NAME_TAGS = ("a", "h2", "h3", "h4", "h5", "h6", "strong", "b", "p", "span", "div", "td", "li", "figcaption")
 LINK_TEXT_HINT = re.compile(r"view|profile|know more|read more|details|more info|meet", re.I)
+SOCIAL_HOST = re.compile(r"(?:^|\.)(?:linkedin|facebook|instagram|twitter|x|youtube|researchgate|orcid|doximity|"
+                         r"practo|justdial|lybrate)\.(?:com|org|net)$|scholar\.google\.|ncbi\.nlm\.nih\.gov$", re.I)
 BOOKING = re.compile(r"book|appointment|enquir|call|whatsapp|video|consult-online|teleconsult", re.I)
 
 
@@ -77,6 +79,8 @@ def _profile_link(card: Tag, name: str, base_url: str) -> str | None:
             continue
         absolute = normalize_url(urljoin(base_url, href))
         text = a.get_text(" ", strip=True)
+        if PERSONAL_LINK.match(urljoin(base_url, href)) or SOCIAL_HOST.search(urlsplit(absolute).hostname or ""):
+            continue  # LinkedIn / Scholar etc. are research links, not the hospital profile page
         if BOOKING.search(href) or (BOOKING.search(text) and not LINK_TEXT_HINT.search(text)):
             continue
         score = 0
@@ -171,6 +175,7 @@ def card_record(card: Tag, name: str, base_url: str) -> DoctorRecord:
         c = city_from(" ".join(lines))
         if c:
             rec.set("city", c, "listing_card", snippet)
+    personal_links(rec, card, base_url, "listing_card")
     img = card.find("img")
     if img and (img.get("src") or img.get("data-src")) and not str(img.get("src", "")).startswith("data:"):
         rec.set("photo_url", urljoin(base_url, img.get("data-src") or img.get("src")), "listing_card", str(img)[:200])
@@ -201,6 +206,34 @@ def _set_card_field(rec: DoctorRecord, f: str, value: str, line: str) -> None:
         rec.set(f, value[:200], "listing_card", line)
 
 
+# Patient stories and reviews name people who are not the hospital's doctors.
+NOT_DOCTORS = re.compile(r"testimonial|patient[-_ ]?(?:stor|speak|review|voice|experience)|what (?:our )?patients|"
+                         r"success[-_ ]?stor|review|feedback|happy[-_ ]?patient|survivor|blog|news|event", re.I)
+DOCTOR_SECTION = re.compile(r"doctor|consultant|specialist|our team|faculty|experts?\b|oncolog", re.I)
+
+
+def in_patient_section(card: Tag) -> bool:
+    """True when the card sits in a testimonial / patient-story block (by wrapper class or the heading above)."""
+    el = card
+    for _ in range(8):
+        if el is None or getattr(el, "name", None) in (None, "body", "html", "[document]", "main"):
+            break
+        cls = el.get("class") or []
+        words = " ".join([*(cls if isinstance(cls, list) else [cls]), el.get("id") or ""])
+        if words.strip():
+            if DOCTOR_SECTION.search(words):
+                return False
+            if NOT_DOCTORS.search(words):
+                return True
+        el = el.parent
+    for heading in card.find_all_previous(["h1", "h2", "h3", "h4"], limit=25):
+        text = " ".join(heading.get_text(" ", strip=True).split())[:120]
+        if not text or NAME_RE.search(text) or plain_person_name(text):
+            continue
+        return bool(NOT_DOCTORS.search(text)) and not DOCTOR_SECTION.search(text)
+    return False
+
+
 def cards(main: Tag, base_url: str, exclude: set[str] | None = None) -> list[DoctorRecord]:
     nodes = _name_nodes(main)
     names = {n for _, n in nodes}
@@ -217,6 +250,8 @@ def cards(main: Tag, base_url: str, exclude: set[str] | None = None) -> list[Doc
             continue
         used_cards.append(card)
         seen.add(name.casefold())
+        if in_patient_section(card):
+            continue
         out.append(card_record(card, name, base_url))
     return out
 
@@ -248,7 +283,7 @@ def repeated_cards(main: Tag, base_url: str) -> list[DoctorRecord]:
                     name = find_name_in_text(t) or plain_person_name(t)
                     if name:
                         break
-            if name:
+            if name and not in_patient_section(m):
                 good.append((m, name))
         if len(good) >= 3 and len(good) >= len(members) * 0.6:
             for m, name in good:

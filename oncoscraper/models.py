@@ -14,7 +14,7 @@ SCALAR_FIELDS = (
 )
 LIST_FIELDS = (
     "qualifications", "sub_specialties", "expertise", "languages",
-    "opd_timings", "education", "awards",
+    "opd_timings", "education", "awards", "research_links",
 )
 ALL_FIELDS = SCALAR_FIELDS + LIST_FIELDS
 

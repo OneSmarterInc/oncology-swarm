@@ -28,6 +28,7 @@ class ScrapeConfig:
     # Local/private addresses are refused unless explicitly allowed (tests, intranet sites).
     allow_private_hosts: bool = field(default_factory=lambda: os.getenv("ONCOSCRAPER_ALLOW_PRIVATE") == "1")
     save_html_dir: str | None = None   # write every fetched page here for debugging
+    strict_public_network: bool = False  # automatic prompt discovery checks DNS and every redirect
     stale_pages: int = 40           # stop a site after this many pages in a row with no doctor (0 = never)
     extra_profile_patterns: list[str] = field(default_factory=list)  # e.g. ["/consultant/"]
 

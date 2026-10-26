@@ -16,9 +16,10 @@ from .models import ALL_FIELDS, LIST_FIELDS, DoctorRecord
 COLUMNS = ["name", "designation", "specialty", "sub_specialties", "department", "hospital", "city",
            "phone", "email", "contact_phone", "contact_email",
            "qualifications", "experience_years", "languages", "expertise", "opd_timings", "consultation_fee",
-           "registration", "education", "awards", "about", "photo_url"]
+           "registration", "education", "awards", "about", "photo_url", "research_links"]
 HEADERS = {"phone": "Doctor Phone", "email": "Doctor Email", "contact_phone": "Hospital / Desk Phone",
-           "contact_email": "Hospital / Desk Email"}
+           "contact_email": "Hospital / Desk Email",
+           "research_links": "Research / Professional Links"}
 assert set(COLUMNS) == set(ALL_FIELDS)
 META_COLUMNS = ["source_hospital", "profile_url", "source_url", "found_on", "is_oncology", "oncology_score",
                 "oncology_terms", "page_type", "fields_filled"]

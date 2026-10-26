@@ -138,6 +138,9 @@ def extract_page(page: Page) -> PageResult:
         and len(card_recs) <= 1 and len(table_recs) < 2
     )
     profile_evidence = strong or weak
+    if not profile_evidence and exclude and not tpl_cards and card_recs:
+        # Not one doctor's page after all: the first heading doctor is a card like the others.
+        card_recs = listing.cards(main, url, set())
     # A page listing three or more other doctors with links is a listing, even if one name sits in the h1
     # (AOI '/our-doctors/clinical-oncologists' put the first doctor's name in a heading).
     linked_cards = {normalize_url(urljoin(url, c.profile_url)) for c in card_recs if c.profile_url} - {normalize_url(url)}

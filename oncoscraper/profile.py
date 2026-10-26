@@ -150,6 +150,25 @@ def assign_phones(rec: DoctorRecord, found: list[tuple[str, str]], layer: str, s
     add_contacts(rec, "contact_phone", [d for d in desk if d not in (rec.get("phone") or "")], layer, snippet, url)
 
 
+# A person's own research or professional page. Company pages (linkedin.com/company/...) do not match.
+PERSONAL_LINK = re.compile(
+    r"^https?://(?:[\w-]+\.)?(?:linkedin\.com/in/[^/?#]+|researchgate\.net/profile/[^/?#]+|"
+    r"scholar\.google\.[a-z.]+/citations\?(?:[^#]*&)?user=[\w-]+|orcid\.org/\d{4}-\d{4}-\d{4}-\d{3}[\dX]|"
+    r"pubmed\.ncbi\.nlm\.nih\.gov/\?(?:[^#]*&)?term=[^#]+|ncbi\.nlm\.nih\.gov/myncbi/[^?#]+|"
+    r"(?:www\.)?doximity\.com/pub/[^/?#]+)", re.I)
+
+
+def personal_links(rec: DoctorRecord, scope: Tag, base_url: str, layer: str = "patterns") -> None:
+    """LinkedIn, ResearchGate, Google Scholar, ORCID, PubMed links inside the doctor's own block."""
+    found = []
+    for a in scope.find_all("a", href=True):
+        href = urljoin(base_url, a["href"].strip())
+        if PERSONAL_LINK.match(href) and href not in found:
+            found.append(href)
+    if found:
+        rec.set("research_links", found[:6], layer, " ".join(found[:3])[:200], base_url)
+
+
 def find_name_in_text(text: str) -> str | None:
     m = NAME_RE.search(text)
     if not m:
@@ -447,6 +466,9 @@ def patterns(rec: DoctorRecord, lines: list[Line], name_idx: int, main: Tag, url
             if sub_specialties(crumb) or re.search(r"onco|ology", crumb, re.I):
                 rec.set("specialty", crumb, "patterns", " > ".join(breadcrumbs), url)
                 break
+
+    if "research_links" not in rec.values:
+        personal_links(rec, main, url)
 
     # Photo: og:image, or an <img> whose alt mentions the surname.
     if "photo_url" not in rec.values:

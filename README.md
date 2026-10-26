@@ -83,6 +83,14 @@ History is saved in `results\oncoscraper.db` (one SQLite file). Copy that file t
 
 Use `.\.venv\Scripts\python.exe` in place of `python` on Windows. Press Ctrl+C to stop a crawl early; what was found is still saved.
 
+## Find hospitals from a prompt (new)
+
+The top card on **New run** takes a plain request, for example
+`Find 10 cancer hospitals in Delhi and their oncologists`. It finds the official
+hospital sites, crawls their doctor pages, filters (oncologists, speciality, city)
+and saves an Excel plus a row in Runs. It needs SearXNG; Ollama is needed only for
+the "AI judges each page" engine. Setup: `docs/prompt-setup.md`.
+
 ## Crawl many hospitals at once (Excel upload)
 
 There is no allow-list to edit by hand. You give a hospital list in the standard template, and the crawler stays on the websites in that file.
