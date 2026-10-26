@@ -325,7 +325,7 @@ def resolve(
 
         owner = claimed.get(best.url) if best else None
         if owner and owner != row["name"]:
-            report["shared"].append((row["name"], best.url, owner))
+            report["shared"].append((row["name"], best.url, owner, row["aicte_id"]))
             best = None
             why = f"shared domain, already claimed by {owner[:45]}"
 
@@ -431,6 +431,10 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--accept", nargs=2, metavar=("AICTE_ID", "URL"),
                         help="record a website you checked by hand")
+    parser.add_argument("--review-csv", type=Path,
+                        help="write the held-back rows to a CSV for bulk review")
+    parser.add_argument("--apply-csv", type=Path,
+                        help="read a reviewed CSV back and record the rows marked yes")
     args = parser.parse_args()
 
     if args.self_test:
@@ -446,6 +450,23 @@ def main() -> None:
             print("  continuing without it; every refusal stands as it is\n")
 
     conn = registry.connect(args.db)
+
+    if args.apply_csv:
+        import csv as csv_module
+
+        applied = skipped_rows = 0
+        with args.apply_csv.open(encoding="utf-8-sig", newline="") as handle:
+            for record in csv_module.DictReader(handle):
+                keep = str(record.get("accept", "")).strip().lower()
+                url = str(record.get("url", "")).strip()
+                aicte_id = str(record.get("aicte_id", "")).strip()
+                if keep in {"y", "yes", "1", "true"} and url and aicte_id:
+                    registry.set_website(conn, aicte_id, url, "reviewed")
+                    applied += 1
+                else:
+                    skipped_rows += 1
+        print(f"recorded {applied} websites, left {skipped_rows} rows alone")
+        return
 
     if args.accept:
         aicte_id, url = args.accept
@@ -474,8 +495,24 @@ def main() -> None:
         print(f"    python tools\\{Path(__file__).name} --db {args.db} --accept <aicte-id> <url>")
     if report.get("shared"):
         print("\n  Shared domain, left blank so one site is not crawled twice:")
-        for name, url, owner in report["shared"]:
+        for name, url, owner, _rid in report["shared"]:
             print(f"  =    {name[:40]:40}  {url:38}  held by {owner[:30]}")
+    if args.review_csv and (report["review"] or report.get("shared")):
+        import csv as csv_module
+
+        args.review_csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.review_csv.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv_module.writer(handle)
+            writer.writerow(["accept", "name", "url", "score", "reason", "aicte_id"])
+            for aicte_id, name, url, score, why in report["review"]:
+                writer.writerow(["", name, url, score, why, aicte_id])
+            for name, url, owner, rid in report.get("shared", []):
+                writer.writerow(["", name, url, "", f"shared with {owner}", rid])
+        print(f"\n{len(report['review']) + len(report.get('shared', []))} rows for review "
+              f"written to {args.review_csv}")
+        print("  Put y in the accept column for the rows you want, then:")
+        print(f"    python resolve_websites.py --db {args.db} --apply-csv {args.review_csv}")
+
     if report["unresolved"]:
         print()
         for name, why in report["unresolved"]:
