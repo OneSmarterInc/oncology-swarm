@@ -752,3 +752,13 @@ def prompt_action(job_id: str, action: str):
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
     return {"id": job_id, "state": job["state"], "kind": "prompt"}
+
+
+# Registry-first seeding, beside the existing /api/discovery workflow. Guarded,
+# so the portal starts unchanged when the shared seedsources package is absent.
+try:
+    from .seed_discovery import register as _register_seeds
+
+    _register_seeds(app, BatchIn, BatchJob, BATCHES, store, _safe, _load_upload)
+except Exception as _seed_error:  # pragma: no cover - import-time guard
+    app.state.seed_error = str(_seed_error)
