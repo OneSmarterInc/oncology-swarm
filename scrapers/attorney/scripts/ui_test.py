@@ -99,8 +99,14 @@ def main():
                 page.locator("#run-summary .badge.completed").wait_for(timeout=15000)
                 assert page.locator(".crawl-progress").get_attribute("value") == "100"
                 rid = page.evaluate("selectedRun")
-                assert page.evaluate("()=>badge('completed_with_issues').textContent") == 'Completed'
-                assert page.evaluate("()=>badge('completed_with_issues').className") == 'badge completed'
+                assert (
+                    page.evaluate("()=>badge('completed_with_issues').textContent")
+                    == "Completed"
+                )
+                assert (
+                    page.evaluate("()=>badge('completed_with_issues').className")
+                    == "badge completed"
+                )
                 checks.append("Legacy completion status uses neutral Completed label")
                 checks.append("URL-only creation and completed progress")
                 # Synthetic progress snapshot checks the UI, not crawler math.
