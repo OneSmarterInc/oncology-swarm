@@ -279,18 +279,26 @@ def resolve(
         # than arithmetic. A local model may answer it, choosing from the list
         # the scorer already shortlisted; it can never supply a URL of its own
         # and its "cannot tell" is respected.
+        #
+        # The model breaks ties; it does not rescue weak candidates. Only
+        # candidates that already clear the threshold on their own evidence are
+        # offered, and a pick is accepted only if it still clears it. Asked to
+        # choose among domains that score near zero, a model will choose one
+        # anyway, which is how an unrelated site becomes a confident answer.
         model_note = ""
-        if not best and use_model and len(scored) > 1:
+        if not best and use_model:
             import tiebreak
 
-            chosen, verdict = tiebreak.break_tie(
-                row["name"], scored, (row.get("district") or "").title()
-            )
-            if chosen:
-                best = chosen
-                model_note = " (model chose between close candidates)"
-            elif verdict.error:
-                model_note = f" (model unavailable: {verdict.error})"
+            plausible = [c for c in scored if c.score >= threshold]
+            if len(plausible) > 1:
+                chosen, verdict = tiebreak.break_tie(
+                    row["name"], plausible, (row.get("district") or "").title()
+                )
+                if chosen and chosen.score >= threshold:
+                    best = chosen
+                    model_note = " (model chose between close candidates)"
+                elif verdict.error:
+                    model_note = f" (model unavailable: {verdict.error})"
 
         owner = claimed.get(best.url) if best else None
         if owner and owner != row["name"]:

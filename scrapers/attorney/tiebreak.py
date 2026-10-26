@@ -155,6 +155,12 @@ def break_tie(
     verdict = ask(name, [c.url for c in shortlist], location, **kwargs)
     if not verdict.decided:
         return None, verdict
+    # Range-check rather than trusting the index. ask() already maps 0 and
+    # out-of-range to undecided, but a negative or zero index reaching this
+    # line would silently wrap to the last candidate, which is exactly the
+    # kind of quiet wrong answer this whole path exists to avoid.
+    if not 1 <= verdict.index <= len(shortlist):
+        return None, Verdict(None, raw=verdict.raw, error="index out of range")
     return shortlist[verdict.index - 1], verdict
 
 
@@ -195,6 +201,22 @@ def self_test() -> None:
         failures += 0 if ok else 1
         print(f"  {'ok  ' if ok else 'FAIL'} {label:22} reply={reply!r:20} -> {verdict.index}")
 
+    # An out-of-range index must not wrap to the last candidate.
+    pair = [
+        types.SimpleNamespace(url="https://a.test/", score=2.5),
+        types.SimpleNamespace(url="https://b.test/", score=2.5),
+    ]
+    import tiebreak as _self
+
+    saved = _self.ask
+    for bad in (0, -1, 99):
+        _self.ask = lambda *a, _b=bad, **k: Verdict(_b)
+        chosen, _verdict = break_tie("X", pair)
+        ok = chosen is None
+        failures += 0 if ok else 1
+        print(f"  {'ok  ' if ok else 'FAIL'} index {bad} rejected")
+    _self.ask = saved
+
     # A single candidate is never sent to the model.
     fake = [types.SimpleNamespace(url="https://only.test/", score=1.0)]
     pick, verdict = break_tie("X", fake)
@@ -202,7 +224,7 @@ def self_test() -> None:
     failures += 0 if ok else 1
     print(f"  {'ok  ' if ok else 'FAIL'} single candidate skipped")
 
-    print(f"\n{len(cases) + 1 - failures}/{len(cases) + 1} passed")
+    print(f"\n{len(cases) + 4 - failures}/{len(cases) + 4} passed")
     reachable, note = available()
     print(f"model check: {note}")
 
