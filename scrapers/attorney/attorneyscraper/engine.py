@@ -33,21 +33,29 @@ class Manager:
                 raise ValueError(
                     "A run is still active. Pause or stop it before starting another."
                 )
-            run = self.store.get(rid)
-            if run["status"] in {"completed", "completed_with_issues"} and not retry:
-                raise ValueError(
-                    "This run is complete. Start a new run or retry its errors."
+            self.store.owner.acquire()
+            try:
+                run = self.store.get(rid)
+                if (
+                    run["status"] in {"completed", "completed_with_issues"}
+                    and not retry
+                ):
+                    raise ValueError(
+                        "This run is complete. Start a new run or retry its errors."
+                    )
+                if retry:
+                    self.store.retry_errors(rid)
+                self.stop_event = threading.Event()
+                self.active_id = rid
+                self.requested = "stopped"
+                self.store.set_status(rid, "running")
+                self.thread = threading.Thread(
+                    target=self._run, args=(rid,), daemon=True, name="attorney-run"
                 )
-            if retry:
-                self.store.retry_errors(rid)
-            self.stop_event = threading.Event()
-            self.active_id = rid
-            self.requested = "stopped"
-            self.store.set_status(rid, "running")
-            self.thread = threading.Thread(
-                target=self._run, args=(rid,), daemon=True, name="attorney-run"
-            )
-            self.thread.start()
+                self.thread.start()
+            except BaseException:
+                self.store.owner.release()
+                raise
 
     def control(self, rid, action):
         with self.lock:
@@ -98,11 +106,18 @@ class Manager:
                     (rid, "failure", f"{type(e).__name__}: {e}"[:500]),
                 )
 
+        finally:
+            self.store.owner.release()
+
     def _site(self, rid, host, src, config):
         if self.stop_event.is_set():
             return
+        previous = next(s for s in self.store.get(rid)["sites"] if s["host"] == host)
+        if previous["status"] in {"completed", "limited", "error"}:
+            return
         self.store.set_site(rid, host, "running")
         fetcher = self.fetcher_factory(delay=config.delay, stop=self.stop_event)
+        known = self.store.known_urls(rid)
         try:
             while not self.stop_event.is_set():
                 summary = next(
@@ -176,8 +191,40 @@ class Manager:
                             response.text,
                             response.url,
                             src.organization,
-                            src.city,
-                            src.state,
+                            next(
+                                (
+                                    s.city
+                                    for s in config.sources
+                                    if s.url == page["url"]
+                                ),
+                                src.city
+                                if len(
+                                    {
+                                        s.city
+                                        for s in config.sources
+                                        if site_key(s.url) == host
+                                    }
+                                )
+                                == 1
+                                else "",
+                            ),
+                            next(
+                                (
+                                    s.state
+                                    for s in config.sources
+                                    if s.url == page["url"]
+                                ),
+                                src.state
+                                if len(
+                                    {
+                                        s.state
+                                        for s in config.sources
+                                        if site_key(s.url) == host
+                                    }
+                                )
+                                == 1
+                                else "",
+                            ),
                         )
                         if (
                             result["text_length"] < 60
@@ -200,34 +247,44 @@ class Manager:
                             policy = fetcher.policy(response.url, host)
                             for sitemap in policy.sitemaps[:4]:
                                 links.append({"url": sitemap, "priority": 10})
-                    admitted = []
-                    if page["depth"] < config.max_depth:
-                        for link in links:
-                            try:
-                                link["url"] = canonical_url(link["url"])
-                            except ValueError:
-                                continue
-                            if site_key(link["url"]) == host and not SKIP.search(
-                                link["url"]
-                            ):
-                                admitted.append(link)
-                    # Bound frontier growth even when a large sitemap is encountered.
+                    eligible = {}
+                    for link in links:
+                        try:
+                            target = canonical_url(link["url"])
+                        except ValueError:
+                            continue
+                        if (
+                            site_key(target) == host
+                            and target not in known
+                            and not SKIP.search(target)
+                        ):
+                            eligible[target] = max(
+                                link["priority"], eligible.get(target, 0)
+                            )
                     remaining = max(
                         0,
                         config.max_pages * 10
                         - summary["queued"]
-                        - summary["processed"],
+                        - summary["processed"]
+                        - 1,
                     )
-                    truncated = len(admitted) > remaining
-                    admitted = sorted(admitted, key=lambda link: -link["priority"])[
-                        :remaining
+                    admitted = [
+                        {"url": u, "priority": score} for u, score in eligible.items()
                     ]
+                    truncated = len(admitted) > remaining
                     note = (
                         "depth_limit"
-                        if links and page["depth"] >= config.max_depth
+                        if admitted and page["depth"] >= config.max_depth
                         else "frontier_limit"
                         if truncated
                         else ""
+                    )
+                    admitted = (
+                        []
+                        if page["depth"] >= config.max_depth
+                        else sorted(admitted, key=lambda link: -link["priority"])[
+                            :remaining
+                        ]
                     )
                     self.store.finish_page(
                         page,
@@ -236,6 +293,7 @@ class Manager:
                         elapsed=time.monotonic() - began,
                         links=admitted,
                     )
+                    known.update(link["url"] for link in admitted)
                 except Stopped:
                     self.store.finish_page(
                         page, status="queued", note="Interrupted before page commit"

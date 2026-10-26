@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import RunConfig, site_key
+from .security import DatabaseOwner
 
 
 def now():
@@ -18,8 +21,12 @@ def now():
 
 class Store:
     def __init__(self, path):
+        self.cache_lock = threading.Lock()
+        self.cache_version = 0
+        self.record_cache = {}
         self.path = str(path)
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.owner = DatabaseOwner(path)
         with self.db() as db:
             db.executescript("""
             PRAGMA journal_mode=WAL;
@@ -29,10 +36,17 @@ class Store:
             CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY,run_id TEXT,host TEXT,url TEXT,depth INTEGER,priority INTEGER,status TEXT DEFAULT 'queued',note TEXT DEFAULT '',record_count INTEGER DEFAULT 0,elapsed REAL DEFAULT 0,UNIQUE(run_id,url),FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE);
             CREATE INDEX IF NOT EXISTS pages_queue ON pages(run_id,host,status,priority);
             CREATE TABLE IF NOT EXISTS observations(run_id TEXT,page_url TEXT,person_key TEXT,payload TEXT,PRIMARY KEY(run_id,page_url,person_key),FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS observations_run ON observations(run_id);
             CREATE TABLE IF NOT EXISTS reviews(run_id TEXT,person_key TEXT,status TEXT,note TEXT,updated_at TEXT,PRIMARY KEY(run_id,person_key),FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,run_id TEXT,action TEXT,detail TEXT,created_at TEXT);
             """)
             db.execute("INSERT OR IGNORE INTO schema_versions VALUES(1,?)", (now(),))
+            columns = {r[1] for r in db.execute("PRAGMA table_info(pages)")}
+            if "updated_at" not in columns:
+                db.execute("ALTER TABLE pages ADD COLUMN updated_at TEXT DEFAULT ''")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS pages_log ON pages(run_id,updated_at)"
+            )
 
     @contextmanager
     def db(self):
@@ -42,6 +56,10 @@ class Store:
         try:
             yield db
             db.commit()
+            if db.total_changes:
+                with self.cache_lock:
+                    self.cache_version += 1
+                    self.record_cache.clear()
         except BaseException:
             db.rollback()
             raise
@@ -49,7 +67,7 @@ class Store:
             db.close()
 
     def recover(self):
-        with self.db() as db:
+        with self.owner, self.db() as db:
             db.execute(
                 "UPDATE runs SET status='interrupted',updated_at=? WHERE status IN ('running','pausing','stopping')",
                 (now(),),
@@ -92,37 +110,50 @@ class Store:
             item["sites"] = [
                 dict(r)
                 for r in db.execute(
-                    "SELECT s.*, (SELECT count(*) FROM pages p WHERE p.run_id=s.run_id AND p.host=s.host AND p.status IN ('done','error','skipped')) AS processed, (SELECT count(*) FROM pages p WHERE p.run_id=s.run_id AND p.host=s.host AND p.status='queued') AS queued, (SELECT count(*) FROM pages p WHERE p.run_id=s.run_id AND p.host=s.host AND p.status='error') AS errors FROM sites s WHERE run_id=?",
-                    (rid,),
+                    "SELECT * FROM sites WHERE run_id=? ORDER BY rowid", (rid,)
                 )
             ]
+            counts = {}
+            for host, status, count in db.execute(
+                "SELECT host,status,count(*) FROM pages WHERE run_id=? GROUP BY host,status",
+                (rid,),
+            ):
+                counts.setdefault(host, {})[status] = count
+            terminal = {"done", "error", "skipped"}
+            for site in item["sites"]:
+                c = counts.get(site["host"], {})
+                site.update(
+                    processed=sum(c.get(k, 0) for k in terminal),
+                    queued=c.get("queued", 0),
+                    errors=c.get("error", 0),
+                    reading=c.get("fetching", 0),
+                    successful=c.get("done", 0),
+                    skipped=c.get("skipped", 0),
+                )
             item["pages_processed"] = sum(s["processed"] for s in item["sites"])
             item["pages_queued"] = sum(s["queued"] for s in item["sites"])
-            pages = [
-                dict(p)
-                for p in db.execute(
-                    "SELECT host,url,status FROM pages WHERE run_id=?", (rid,)
-                )
-            ]
             seeds = {s["url"] for s in item["config"]["sources"]}
-            terminal = {"done", "error", "skipped"}
+            placeholders = ",".join("?" for _ in seeds)
+            finished_seeds = db.execute(
+                f"SELECT count(*) FROM pages WHERE run_id=? AND url IN ({placeholders}) AND status IN ('done','error','skipped')",
+                (rid, *seeds),
+            ).fetchone()[0]
             item["progress"] = {
                 "starting_total": len(seeds),
-                "starting_finished": sum(
-                    p["url"] in seeds and p["status"] in terminal for p in pages
-                ),
-                "successful": sum(p["status"] == "done" for p in pages),
-                "failed": sum(p["status"] == "error" for p in pages),
-                "skipped": sum(p["status"] == "skipped" for p in pages),
-                "waiting": sum(p["status"] == "queued" for p in pages),
-                "reading": [p["url"] for p in pages if p["status"] == "fetching"],
-                "discovered": len(pages),
+                "starting_finished": finished_seeds,
+                "successful": sum(s["successful"] for s in item["sites"]),
+                "failed": sum(s["errors"] for s in item["sites"]),
+                "skipped": sum(s["skipped"] for s in item["sites"]),
+                "waiting": item["pages_queued"],
+                "reading": [
+                    r[0]
+                    for r in db.execute(
+                        "SELECT url FROM pages WHERE run_id=? AND status='fetching'",
+                        (rid,),
+                    )
+                ],
+                "discovered": sum(sum(c.values()) for c in counts.values()),
             }
-            for site in item["sites"]:
-                subset = [p for p in pages if p["host"] == site["host"]]
-                site["reading"] = sum(p["status"] == "fetching" for p in subset)
-                site["successful"] = sum(p["status"] == "done" for p in subset)
-                site["skipped"] = sum(p["status"] == "skipped" for p in subset)
             # A fixed per-site budget keeps discovery from moving progress backwards.
             # Finished sites consume their share even if they exhaust links early.
             budget = item["config"]["max_pages"]
@@ -141,12 +172,13 @@ class Store:
             )
             return item
 
-    def runs(self):
+    def runs(self, offset=0, limit=200):
         with self.db() as db:
             ids = [
                 r[0]
                 for r in db.execute(
-                    "SELECT id FROM runs ORDER BY created_at DESC LIMIT 200"
+                    "SELECT id FROM runs ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
                 )
             ]
         return [self.get(rid) for rid in ids]
@@ -177,7 +209,8 @@ class Store:
             ).fetchone()
             if row:
                 db.execute(
-                    "UPDATE pages SET status='fetching' WHERE id=?", (row["id"],)
+                    "UPDATE pages SET status='fetching',updated_at=? WHERE id=?",
+                    (now(), row["id"]),
                 )
             return dict(row) if row else None
 
@@ -202,12 +235,13 @@ class Store:
                     ),
                 )
             db.execute(
-                "UPDATE pages SET status=?,note=?,record_count=?,elapsed=? WHERE id=?",
+                "UPDATE pages SET status=?,note=?,record_count=?,elapsed=?,updated_at=? WHERE id=?",
                 (
                     status,
                     note,
                     len((result or {}).get("records", [])),
                     elapsed,
+                    now(),
                     page["id"],
                 ),
             )
@@ -217,6 +251,19 @@ class Store:
 
     def retry_errors(self, rid):
         with self.db() as db:
+            hosts = [
+                r[0]
+                for r in db.execute(
+                    "SELECT DISTINCT host FROM pages WHERE run_id=? AND status='error'",
+                    (rid,),
+                )
+            ]
+            if not hosts:
+                raise ValueError("There are no failed pages to retry.")
+            db.executemany(
+                "UPDATE sites SET status='queued',reason='' WHERE run_id=? AND host=?",
+                [(rid, h) for h in hosts],
+            )
             db.execute(
                 "UPDATE pages SET status='queued',note='' WHERE run_id=? AND status='error'",
                 (rid,),
@@ -231,7 +278,55 @@ class Store:
                 )
             ]
 
+    def page_log(self, rid, offset=0, limit=100):
+        with self.db() as db:
+            return [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM pages WHERE run_id=? ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?",
+                    (rid, limit, offset),
+                )
+            ]
+
+    def history(self, offset=0, limit=50):
+        with self.db() as db:
+            total = db.execute("SELECT count(*) FROM runs").fetchone()[0]
+            rows = db.execute(
+                "SELECT r.*, (SELECT count(*) FROM sites s WHERE s.run_id=r.id) AS websites, (SELECT count(*) FROM pages p WHERE p.run_id=r.id AND p.status IN ('done','error','skipped')) AS pages_processed, (SELECT count(DISTINCT person_key) FROM observations o WHERE o.run_id=r.id) AS people FROM runs r ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            items = [dict(r) for r in rows]
+            for item in items:
+                item.pop("config", None)
+        return {"total": total, "items": items}
+
+    def delete(self, rid):
+        self.get(rid)
+        with self.db() as db:
+            db.execute("DELETE FROM audit WHERE run_id=?", (rid,))
+            db.execute("DELETE FROM runs WHERE id=?", (rid,))
+
     def records(self, rid=None):
+        with self.cache_lock:
+            version = self.cache_version
+            cached = self.record_cache.get(rid)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        result = self._records(rid)
+        with self.cache_lock:
+            if version == self.cache_version:
+                if len(self.record_cache) >= 4:
+                    self.record_cache.clear()
+                self.record_cache[rid] = copy.deepcopy(result)
+        return result
+
+    def known_urls(self, rid):
+        with self.db() as db:
+            return {
+                r[0] for r in db.execute("SELECT url FROM pages WHERE run_id=?", (rid,))
+            }
+
+    def _records(self, rid=None):
         with self.db() as db:
             rows = db.execute(
                 "SELECT o.*,r.created_at FROM observations o JOIN runs r ON r.id=o.run_id "

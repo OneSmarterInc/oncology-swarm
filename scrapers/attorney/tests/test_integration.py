@@ -57,7 +57,7 @@ def test_end_to_end_crawl_review_export(tmp_path, factory):
             "Attorneys",
             "Evidence",
             "Pages",
-            "Review history",
+            "Run audit",
         ]
         assert wb["Attorneys"].max_row == 4
         assert wb["Evidence"].max_row > 4

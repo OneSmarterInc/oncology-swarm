@@ -13,7 +13,7 @@ HEADERS = [
     "Title",
     "Categories",
     "Client side",
-    "Review status",
+    "Classification",
     "Individual email",
     "Individual phone",
     "Organization email",
@@ -24,7 +24,7 @@ HEADERS = [
     "State",
     "Profile URL",
     "Observed at",
-    "Review note",
+    "Legacy note",
 ]
 
 
@@ -54,7 +54,11 @@ def rows(records):
             p["title"],
             ", ".join(p["categories"]),
             ", ".join(p["client_side"]),
-            p["status"],
+            {
+                "confirmed": "Attorney match supported",
+                "needs_review": "Insufficient evidence",
+                "excluded": "Excluded",
+            }.get(p["status"], p["status"]),
             values("individual", "email"),
             values("individual", "phone"),
             values("organization", "email"),
@@ -108,7 +112,10 @@ def workbook_bytes(records, run=None, pages=(), audit=()):
             ("Run status", (run or {}).get("status", "Snapshot")),
             ("People", len(records)),
             ("Confirmed", sum(p["status"] == "confirmed" for p in records)),
-            ("Needs review", sum(p["status"] == "needs_review" for p in records)),
+            (
+                "Insufficient evidence",
+                sum(p["status"] == "needs_review" for p in records),
+            ),
             (
                 "Individual email",
                 sum(
@@ -170,7 +177,7 @@ def workbook_bytes(records, run=None, pages=(), audit=()):
         ],
     )
     sheet(
-        "Review history",
+        "Run audit",
         ["Action", "Detail", "Time"],
         [[a["action"], a["detail"], a["created_at"]] for a in audit],
     )

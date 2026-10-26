@@ -23,7 +23,7 @@ def canonical_url(value: str) -> str:
         raise ValueError(
             "Use a public http:// or https:// website URL without credentials."
         )
-    if p.port not in {None, 80, 443}:
+    if p.port not in {None, 443 if p.scheme == "https" else 80}:
         raise ValueError("Only standard web ports are supported.")
     host = p.hostname.lower().encode("idna").decode()
     query = urlencode(

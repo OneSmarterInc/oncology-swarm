@@ -42,16 +42,17 @@ def main():
         from .store import Store
 
         store = Store(args.db)
-        store.recover()
-        config = RunConfig(**json.loads(Path(args.config).read_text()))
-        rid = store.create(config)
-        manager = Manager(store)
-        manager.start(rid)
-        try:
-            manager.thread.join()
-        except KeyboardInterrupt:
-            manager.close()
-        print(json.dumps(store.get(rid), indent=2))
+        with store.owner:
+            store.recover()
+            config = RunConfig(**json.loads(Path(args.config).read_text()))
+            rid = store.create(config)
+            manager = Manager(store)
+            manager.start(rid)
+            try:
+                manager.thread.join()
+            except KeyboardInterrupt:
+                manager.close()
+            print(json.dumps(store.get(rid), indent=2))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,6 @@
 """Opt-in real-site integration pilot. Fetches robots and five public biographies.
 
-Default uses normal public-DNS validation. --remote-dns-proxy is a test adapter
-for this sandbox's remote-resolving SOCKS proxy ONLY: allowlists the two audited
-hosts instead of requiring unavailable local DNS. It is not exposed in the app.
+Uses the production public-DNS and pinned-connection transport. No proxy bypass.
 """
 
 import argparse
@@ -14,8 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from attorneyscraper.engine import Manager
 from attorneyscraper.export import csv_bytes, parse_sources
-from attorneyscraper.fetch import Fetcher, FetchError
-from attorneyscraper.models import RunConfig, canonical_url, site_key
+from attorneyscraper.fetch import Fetcher
+from attorneyscraper.models import RunConfig
 from attorneyscraper.store import Store
 
 EXPECTED = {
@@ -49,7 +47,6 @@ EXPECTED = {
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--remote-dns-proxy", action="store_true")
     parser.add_argument("--out", default="results/real-pilot")
     args = parser.parse_args()
     out = Path(args.out)
@@ -69,15 +66,7 @@ def main():
         delay=1.5,
     )
 
-    def validate(url):
-        value = canonical_url(url)
-        if site_key(value) not in {"hccw.com", "fuchsberg.com"}:
-            raise FetchError("Outside audited pilot hosts")
-        return value
-
     def factory(**kwargs):
-        if args.remote_dns_proxy:
-            kwargs["validate"] = validate
         fetcher = Fetcher(**kwargs)
         original = fetcher.get
 
@@ -126,7 +115,7 @@ def main():
     report = {
         "run_id": rid,
         "elapsed_seconds": round(time.monotonic() - began, 2),
-        "remote_dns_adapter": args.remote_dns_proxy,
+        "remote_dns_adapter": False,
         "run": store.get(rid),
         "checks": checks,
         "pages": store.pages(rid),

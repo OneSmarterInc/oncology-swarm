@@ -15,7 +15,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .classify import discovery_queries
 from .engine import Manager
 from .export import csv_bytes, parse_sources, workbook_bytes
-from .models import CATEGORIES, Review, RunConfig
+from .extract import extract
+from .fetch import FetchError
+from .models import CATEGORIES, Review, RunConfig, Source, site_key
+from .security import BodyLimit
 from .store import Store
 
 
@@ -28,9 +31,12 @@ def create_app(db_path=None, fetcher_factory=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        store.recover()
-        yield
-        manager.close()
+        with store.owner:
+            store.recover()
+            try:
+                yield
+            finally:
+                manager.close()
 
     app = FastAPI(
         title="Healthcare Attorney Scraper", version="0.1.0", lifespan=lifespan
@@ -43,7 +49,15 @@ def create_app(db_path=None, fetcher_factory=None):
     @app.middleware("http")
     async def local_protection(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        try:
+            parsed_origin = urlsplit(origin) if origin else None
+            invalid_origin = parsed_origin and (
+                parsed_origin.scheme not in {"http", "https"}
+                or parsed_origin.netloc != request.headers.get("host")
+            )
+        except ValueError:
+            invalid_origin = True
+        if invalid_origin:
             return JSONResponse(
                 {"detail": "Cross-origin requests are not allowed"}, status_code=403
             )
@@ -55,14 +69,6 @@ def create_app(db_path=None, fetcher_factory=None):
                     {"detail": "Missing session token. Reload the page."},
                     status_code=403,
                 )
-            try:
-                size = int(request.headers.get("content-length", "0"))
-            except ValueError:
-                size = 99_000_000
-            if size > 3_000_000:
-                return JSONResponse({"detail": "Request too large"}, status_code=413)
-            if len(await request.body()) > 3_000_000:
-                return JSONResponse({"detail": "Request too large"}, status_code=413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -96,8 +102,60 @@ def create_app(db_path=None, fetcher_factory=None):
         return {"status": "ok", "version": "0.1.0"}
 
     @app.get("/api/runs")
-    def runs():
-        return store.runs()
+    def runs(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200)):
+        return store.runs(offset, limit)
+
+    @app.get("/api/history")
+    def history(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200)):
+        return store.history(offset, limit)
+
+    @app.post("/api/page-test")
+    def page_test(source: Source):
+        if not manager.lock.acquire(blocking=False):
+            raise HTTPException(
+                409, "Another operation is active. Try again when it finishes."
+            )
+        try:
+            if manager.thread and manager.thread.is_alive():
+                raise HTTPException(
+                    409, "Pause the active crawl before testing a page."
+                )
+            fetcher = manager.fetcher_factory(delay=1.5)
+            try:
+                page = fetcher.get(source.url, site_key(source.url))
+                result = extract(
+                    page.text, page.url, source.organization, source.city, source.state
+                )
+                return {
+                    "url": page.url,
+                    "records": result["records"],
+                    "links": len(result["links"]),
+                    "text_length": result["text_length"],
+                }
+            except FetchError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            finally:
+                fetcher.close()
+        finally:
+            manager.lock.release()
+
+    @app.delete("/api/runs/{rid}")
+    def delete_run(rid: str):
+        with manager.lock:
+            if (
+                manager.active_id == rid
+                and manager.thread
+                and manager.thread.is_alive()
+            ):
+                raise HTTPException(409, "Stop this run before deleting it.")
+            store.delete(rid)
+        return {"deleted": True}
+
+    @app.post("/api/runs/{rid}/clone")
+    def clone_run(rid: str):
+        config = RunConfig(**store.get(rid)["config"])
+        config.name = config.name[:110] + " (rerun)"
+        return start(config)
 
     @app.post("/api/runs", status_code=201)
     def start(config: RunConfig):
@@ -124,16 +182,28 @@ def create_app(db_path=None, fetcher_factory=None):
         return store.get(rid)
 
     @app.get("/api/runs/{rid}/pages")
-    def pages(rid: str):
+    def pages(
+        rid: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)
+    ):
         store.get(rid)
-        return store.pages(rid)
+        return store.page_log(rid, offset, limit)
 
     @app.get("/api/runs/{rid}/audit")
     def audit(rid: str):
         store.get(rid)
         return store.audit(rid)
 
-    def filtered(rid=None, q="", category="", status="", has_email=False):
+    def filtered(
+        rid=None,
+        q="",
+        category="",
+        status="",
+        has_email=False,
+        organization="",
+        city="",
+        has_phone=False,
+        has_contact=False,
+    ):
         if rid:
             store.get(rid)
         data = store.records(rid)
@@ -143,8 +213,30 @@ def create_app(db_path=None, fetcher_factory=None):
             if (
                 not q
                 or q.casefold()
-                in (p["name"] + " " + p["organization"] + " " + p["state"]).casefold()
+                in (
+                    p["name"]
+                    + " "
+                    + p["organization"]
+                    + " "
+                    + p["city"]
+                    + " "
+                    + p["state"]
+                    + " "
+                    + p["title"]
+                    + " "
+                    + " ".join(c["value"] for c in p["contacts"])
+                ).casefold()
             )
+            and (not organization or organization == p["organization"])
+            and (not city or city == p["city"])
+            and (
+                not has_phone
+                or any(
+                    c["kind"] == "phone" and c["owner"] == "individual"
+                    for c in p["contacts"]
+                )
+            )
+            and (not has_contact or bool(p["contacts"]))
             and (not category or category in p["categories"])
             and (not status or p["status"] == status)
             and (
@@ -163,16 +255,56 @@ def create_app(db_path=None, fetcher_factory=None):
         category: str = "",
         status: str = "",
         has_email: bool = False,
+        organization: str = "",
+        city: str = "",
+        has_phone: bool = False,
+        has_contact: bool = False,
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=500),
     ):
-        data = filtered(rid, q, category, status, has_email)
+        data = filtered(
+            rid,
+            q,
+            category,
+            status,
+            has_email,
+            organization,
+            city,
+            has_phone,
+            has_contact,
+        )
         return {"total": len(data), "items": data[offset : offset + limit]}
 
     @app.get("/api/summary")
     def summary():
         people = store.records()
+        firms = {}
+        for person in people:
+            org = person["organization"]
+            row = firms.setdefault(
+                org,
+                {
+                    "organization": org,
+                    "people": 0,
+                    "email": 0,
+                    "phone": 0,
+                    "contact": 0,
+                },
+            )
+            row["people"] += 1
+            row["email"] += any(
+                c["kind"] == "email" and c["owner"] == "individual"
+                for c in person["contacts"]
+            )
+            row["phone"] += any(
+                c["kind"] == "phone" and c["owner"] == "individual"
+                for c in person["contacts"]
+            )
+            row["contact"] += bool(person["contacts"])
         return {
+            "firms": sorted(firms.values(), key=lambda r: r["organization"].casefold()),
+            "cities": sorted({p["city"] for p in people if p["city"]}),
+            "database": str(Path(store.path).resolve()),
             "people": len(people),
             "confirmed": sum(p["status"] == "confirmed" for p in people),
             "needs_review": sum(p["status"] == "needs_review" for p in people),
@@ -201,8 +333,22 @@ def create_app(db_path=None, fetcher_factory=None):
         category: str = "",
         status: str = "",
         has_email: bool = False,
+        organization: str = "",
+        city: str = "",
+        has_phone: bool = False,
+        has_contact: bool = False,
     ):
-        data = filtered(rid, q, category, status, has_email)
+        data = filtered(
+            rid,
+            q,
+            category,
+            status,
+            has_email,
+            organization,
+            city,
+            has_phone,
+            has_contact,
+        )
         if kind == "csv":
             content, media = csv_bytes(data), "text/csv; charset=utf-8"
         elif kind == "xlsx":
@@ -263,4 +409,5 @@ def create_app(db_path=None, fetcher_factory=None):
             raise ValueError("Unknown category")
         return {"queries": discovery_queries(category, location)}
 
+    app.add_middleware(BodyLimit)
     return app

@@ -15,7 +15,7 @@ EMAIL = re.compile(
     r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,24}", re.I
 )
 PHONE = re.compile(
-    r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]([2-9]\d{2})[ .-](\d{4})(?:\s*(?:ext\.?|x|extension)\s*(\d{1,6}))?(?!\d)",
+    r"(?<!\d)(?:\+?1[ .-]?)?\(?([2-9]\d{2})\)?[ .-]?([2-9]\d{2})[ .-]?(\d{4})(?:\s*(?:ext\.?|x|extension)\s*(\d{1,6}))?(?!\d)",
     re.I,
 )
 GENERIC = re.compile(
@@ -35,7 +35,7 @@ def clean_name(value: str) -> str:
         r",?\s+(?:Esq\.?|J\.?D\.?|R\.?N\.?).*$", "", value, flags=re.I
     ).strip()
     parts = value.split()
-    if not 2 <= len(parts) <= 6 or len(value) > 90 or BADNAME.search(value):
+    if not 2 <= len(parts) <= 6 or len(value) > 90 or BADNAME.search(parts[0]):
         return ""
     if any(
         not p[0].isalpha() or any(not c.isalpha() and c not in ".'’‐-" for c in p)
@@ -71,7 +71,16 @@ def phone_values(text: str) -> set[str]:
 def owned_email(email: str, name: str) -> bool:
     local = re.sub(r"[^a-z]", "", email.split("@")[0])
     words = [re.sub(r"[^a-z]", "", w.lower()) for w in name.split()]
-    return any(len(w) >= 4 and w in local for w in (words[0], words[-1]))
+    first, last = words[0], words[-1]
+    return local in {
+        first + last,
+        first[:1] + last,
+        last + first,
+        last + first[:1],
+        first,
+        "".join(words),
+        "".join(w[:1] for w in words[:-1]) + last,
+    }
 
 
 def contacts(
@@ -173,7 +182,7 @@ def json_people(soup):
             types = obj.get("@type", [])
             if isinstance(types, str):
                 types = [types]
-            if "Person" in types:
+            if isinstance(types, list) and "Person" in types:
                 yield obj
             for value in obj.values():
                 if isinstance(value, (dict, list)):
@@ -191,6 +200,26 @@ def extract(
 ) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     structured = list(json_people(soup))[:300]
+    # Discovery is independent of biography cleanup, including menu links.
+    discovered_links = {}
+    for anchor in soup.select("a[href]"):
+        try:
+            target = canonical_url(urljoin(url, anchor["href"]))
+        except ValueError:
+            continue
+        label = anchor.get_text(" ", strip=True)
+        priority = (
+            50
+            if clean_name(label)
+            else 20
+            if re.search(
+                r"attorney|people|professional|team|health|medical|nurse|practice|page=|page/",
+                target + " " + label,
+                re.I,
+            )
+            else 1
+        )
+        discovered_links[target] = max(priority, discovered_links.get(target, 0))
     page_contacts = []
     office_values, fax_values = set(), set()
     for area in soup.select("header,footer,[role=contentinfo]"):
@@ -211,7 +240,11 @@ def extract(
                 types = obj.get("@type", [])
                 if isinstance(types, str):
                     types = [types]
-                if set(types) & {"Organization", "LegalService", "LocalBusiness"}:
+                if isinstance(types, list) and any(
+                    t in {"Organization", "LegalService", "LocalBusiness"}
+                    for t in types
+                    if isinstance(t, str)
+                ):
                     for field, kind in [("email", "email"), ("telephone", "phone")]:
                         raw = obj.get(field, "")
                         if not isinstance(raw, str):
@@ -242,7 +275,7 @@ def extract(
     ]
     office_values = {(c["kind"], c["value"]) for c in page_contacts}
     for node in soup.select(
-        "script,style,nav,footer,header,form,aside,[role=navigation],.related-people,.related-attorneys,.related-content,.related-posts,.news-feed,.publications,.firm-news"
+        "script,style,nav,footer,header,form,[role=navigation],.related-people,.related-attorneys,.related-content,.related-posts,.news-feed,.publications,.firm-news"
     ):
         if (
             node.name == "header"
@@ -252,6 +285,8 @@ def extract(
             continue
         node.decompose()
     main = soup.select_one("main, [role=main]") or soup
+    # Contact sidebars belong to the profile, but are not used as biography text.
+    sidebars = [a for a in soup.select("aside") if a not in main.descendants]
     if not main.select_one("h1") and any(
         clean_name(h.get_text(" ", strip=True)) for h in soup.select("h1")
     ):
@@ -288,7 +323,7 @@ def extract(
             (
                 p
                 for p in structured
-                if p.get("name", "").casefold() == profile_name.casefold()
+                if str(p.get("name") or "").casefold() == profile_name.casefold()
             ),
             {},
         )
@@ -331,6 +366,30 @@ def extract(
             if not isinstance(target, str):
                 target = url
             candidates.append((name, node, urljoin(url, target), p, False))
+
+    def belongs_to_other_person(block, name):
+        heading = block.select_one("h1,h2,h3,h4")
+        other = clean_name(heading.get_text(" ", strip=True)) if heading else ""
+        if not other or other.casefold() == name.casefold():
+            return False
+        if any(
+            str(p.get("name") or "").casefold() == other.casefold() for p in structured
+        ):
+            return True
+        for anchor in block.select("a[href]"):
+            href = unquote(anchor["href"])
+            if href.startswith("mailto:") and any(
+                owned_email(email, other) for email in decode_emails(href)
+            ):
+                return True
+            path = re.sub(r"[^a-z]", "", urlsplit(urljoin(url, href)).path.casefold())
+            if all(
+                re.sub(r"[^a-z]", "", part.casefold()) in path
+                for part in (other.split()[0], other.split()[-1])
+            ):
+                return True
+        return False
+
     records = []
     seen = set()
     for name, node, target, person, is_profile in candidates:
@@ -339,9 +398,31 @@ def extract(
         except ValueError:
             continue
         key = person_key(name, target)
+        if not person:
+            person = next(
+                (
+                    p
+                    for p in structured
+                    if str(p.get("name") or "").casefold() == name.casefold()
+                    and isinstance(p.get("url", target), str)
+                    and urljoin(url, p.get("url", target)) == target
+                ),
+                {},
+            )
         if key in seen:
             continue
         seen.add(key)
+        # Remove other named people before classification/contact attribution.
+        node = BeautifulSoup(str(node), "html.parser")
+        for block in list(
+            node.select(
+                "section,article,aside,div,.person-card,.attorney-card,.team-member"
+            )
+        ):
+            if block.parent is None:
+                continue
+            if belongs_to_other_person(block, name):
+                block.decompose()
         text = node.get_text(" ", strip=True)
         title = str(person.get("jobTitle", ""))
         if not title:
@@ -351,7 +432,12 @@ def extract(
                 re.I,
             )
             title = m.group() if m else ""
-        result = classify(text, title)
+        result = classify(text + " " + title, title)
+        contact_node = BeautifulSoup(str(node), "html.parser")
+        if is_profile:
+            for aside in sidebars:
+                if not belongs_to_other_person(aside, name):
+                    contact_node.append(BeautifulSoup(str(aside), "html.parser"))
         record = {
             "key": key,
             "name": name,
@@ -364,7 +450,7 @@ def extract(
             "location_source": "source_list" if city or state else "not_published",
             "country": "",
             "country_note": "US-targeted run; location not independently verified",
-            "contacts": contacts(node, name, url, person),
+            "contacts": contacts(contact_node, name, url, person),
             "is_profile": is_profile,
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "content_hash": hashlib.sha256(html.encode()).hexdigest(),
@@ -397,26 +483,9 @@ def extract(
         ):
             continue
         records.append(record)
-    links = []
-    for a in soup.select("a[href]"):
-        href = urljoin(url, a["href"])
-        try:
-            href = canonical_url(href)
-        except ValueError:
-            continue
-        label = a.get_text(" ", strip=True)
-        score = (
-            50
-            if clean_name(label)
-            else 20
-            if re.search(
-                r"attorney|people|professional|team|health|medical|nurse|practice|page=|page/",
-                href + " " + label,
-                re.I,
-            )
-            else 1
-        )
-        links.append({"url": href, "priority": score})
+    links = [
+        {"url": target, "priority": score} for target, score in discovered_links.items()
+    ]
     return {
         "records": records,
         "links": links,

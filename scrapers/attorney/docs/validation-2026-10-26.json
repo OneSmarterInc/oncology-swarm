@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-26",
+  "timezone": "Asia/Calcutta",
+  "campus_reference": "34e3bb43973160e04a489012394090bd6a5bfcf7",
+  "tests": {
+    "tests": 123,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      "Campus/Onco top-navigation and theme",
+      "URL-only creation and completed progress",
+      "determinate active progress",
+      "contact evidence, phone filters and filtered exports",
+      "fresh-run reset, URL-only upload preview and invalid file",
+      "single-page test does not save run",
+      "late upload response cannot restore removed sources",
+      "pause and resume real worker",
+      "selected-run directory clears stale filters",
+      "stale run responses ignored",
+      "stored HTML rendered as inert text",
+      "history pagination and confirmed deletion",
+      "desktop, tablet, mobile and dark theme",
+      "no JavaScript errors"
+    ]
+  },
+  "load": {
+    "synthetic_people": 10000,
+    "synthetic_pages": 10001,
+    "measurements": {
+      "run_snapshot": {
+        "seconds": 0.013,
+        "bytes": 849
+      },
+      "page_log_100": {
+        "seconds": 0.011,
+        "bytes": 18703
+      },
+      "history": {
+        "seconds": 0.009,
+        "bytes": 237
+      },
+      "directory_cold": {
+        "seconds": 0.621,
+        "bytes": 54810
+      },
+      "directory_warm": {
+        "seconds": 0.287,
+        "bytes": 54810
+      },
+      "summary": {
+        "seconds": 0.392,
+        "bytes": 346
+      },
+      "xlsx_export": {
+        "seconds": 12.077,
+        "bytes": 1369389
+      }
+    }
+  },
+  "live_pilot": {
+    "attempted": true,
+    "profiles": 5,
+    "retrieved": 0,
+    "result": "Environment DNS resolution failed; fresh live extraction accuracy not verified"
+  },
+  "windows": "Not executed natively in this environment",
+  "github": "Release prepared; remote CI not yet checked"
+}

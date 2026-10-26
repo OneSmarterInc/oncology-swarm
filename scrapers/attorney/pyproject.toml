@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "healthcare-attorney-scraper"
 version = "0.1.0"
-description = "Local healthcare attorney discovery, evidence review and contact exports"
+description = "Local healthcare attorney extraction, source evidence and contact exports"
 requires-python = ">=3.11"
 dynamic = ["dependencies"]
 

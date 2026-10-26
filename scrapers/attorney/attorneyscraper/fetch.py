@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import ipaddress
 import math
 import re
@@ -14,6 +15,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 import httpx
 
 from .models import canonical_url, site_key
+from .transport import PublicTransport
 
 AGENT = "AttorneyResearchBot/0.1"
 MAX_BYTES = 3_000_000
@@ -38,7 +40,10 @@ def public_url(url: str):
         }
     except OSError as e:
         raise FetchError("DNS resolution failed") from e
-    if not addresses or any(not ipaddress.ip_address(a).is_global for a in addresses):
+    if not addresses or any(
+        (not ipaddress.ip_address(a).is_global or ipaddress.ip_address(a).is_multicast)
+        for a in addresses
+    ):
         raise FetchError("Host resolves to a non-public address")
     return url
 
@@ -91,6 +96,18 @@ class Robots:
         ]
         best = max((x[0] for x in scored), default=-1)
         self.rules = [r for s, rr, _ in scored if s == best and s >= 0 for r in rr]
+        self.matchers = []
+        for rule, allow in self.rules:
+            # fnmatch uses bounded/atomic wildcard matching, avoiding repeated .* backtracking.
+            literal = rule[:-1] if rule.endswith("$") else rule + "*"
+            literal = literal.replace("[", "[[]").replace("?", "[?]")
+            self.matchers.append(
+                (
+                    re.compile(fnmatch.translate(literal)),
+                    len(rule.replace("*", "")),
+                    allow,
+                )
+            )
         self.delay = max(
             (d for s, _, dd in scored if s == best and s >= 0 for d in dd), default=0
         )
@@ -99,14 +116,9 @@ class Robots:
         p = urlsplit(url)
         path = p.path + ("?" + p.query if p.query else "")
         matches = []
-        for rule, allow in self.rules:
-            pattern = (
-                "^"
-                + re.escape(rule.rstrip("$")).replace(r"\*", ".*")
-                + ("$" if rule.endswith("$") else "")
-            )
-            if re.search(pattern, path) or re.search(pattern, unquote(path)):
-                matches.append((len(rule.replace("*", "")), allow))
+        for pattern, weight, allow in self.matchers:
+            if pattern.match(path) or pattern.match(unquote(path)):
+                matches.append((weight, allow))
         return max(matches)[1] if matches else True
 
 
@@ -127,8 +139,8 @@ class Fetcher:
             timeout=httpx.Timeout(20, connect=10),
             follow_redirects=False,
             headers={"User-Agent": AGENT},
-            transport=transport,
-            trust_env=transport is None,
+            transport=transport if transport is not None else PublicTransport(),
+            trust_env=False,
         )
         self.policies, self.last = {}, {}
 
@@ -179,7 +191,7 @@ class Fetcher:
                             url = target
                             break
                         data = bytearray()
-                        for chunk in response.iter_bytes():
+                        for chunk in response.iter_bytes(chunk_size=65536):
                             if self.stop.is_set():
                                 raise Stopped("Run stopped")
                             data.extend(chunk)

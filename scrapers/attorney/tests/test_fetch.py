@@ -129,3 +129,16 @@ def test_bad_configuration():
             sources=[{"organization": "Firm", "url": "https://firm.com"}],
             parallel_sites=99,
         )
+
+
+def test_robots_wildcards_have_no_exponential_backtracking():
+    r = Robots("User-agent: *\nDisallow: /" + "*a" * 30 + "b$")
+    assert r.allowed("https://firm.com/" + "a" * 100)
+
+
+def test_robots_question_and_bracket_are_literal():
+    r = Robots("User-agent: *\nDisallow: /find?q=x\nDisallow: /[a]")
+    assert not r.allowed("https://firm.com/find?q=x")
+    assert r.allowed("https://firm.com/findXq=x")
+    assert not r.allowed("https://firm.com/[a]")
+    assert r.allowed("https://firm.com/a")
