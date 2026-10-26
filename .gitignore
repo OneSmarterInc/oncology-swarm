@@ -11,3 +11,5 @@ tests/site/*/
 !sources/*.xlsx
 .env
 searxng/
+tests/site/robots.txt
+tests/site/sitemap.xml
