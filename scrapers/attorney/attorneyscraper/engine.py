@@ -116,7 +116,9 @@ class Manager:
         if previous["status"] in {"completed", "limited", "error"}:
             return
         self.store.set_site(rid, host, "running")
-        fetcher = self.fetcher_factory(delay=config.delay, stop=self.stop_event)
+        fetcher = self.fetcher_factory(
+            delay=config.delay, stop=self.stop_event, render=config.render
+        )
         known = self.store.known_urls(rid)
         try:
             while not self.stop_event.is_set():

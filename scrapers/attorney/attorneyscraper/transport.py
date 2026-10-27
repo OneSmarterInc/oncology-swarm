@@ -5,7 +5,6 @@ No environment proxies are used: they could resolve outside this boundary.
 """
 
 import ipaddress
-import socket
 import ssl
 from contextlib import contextmanager
 

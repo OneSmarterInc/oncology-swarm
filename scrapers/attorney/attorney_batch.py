@@ -21,6 +21,8 @@ def main() -> None:
     ap.add_argument("--db", default="results/attorneys.db")
     ap.add_argument("--max-pages", type=int, default=60)
     ap.add_argument("--delay", type=float, default=1.5)
+    ap.add_argument("--render", choices=("never", "auto", "always"), default="auto",
+                    help="auto (default): use Chromium only for a site that blocks the plain client")
     args = ap.parse_args()
 
     src = Path(args.sources)
@@ -31,7 +33,7 @@ def main() -> None:
     with store.owner:
         store.recover()
         config = RunConfig(name=f"cli {src.name}", sources=[s.model_dump() for s in sources],
-                           max_pages=args.max_pages, delay=args.delay)
+                           max_pages=args.max_pages, delay=args.delay, render=args.render)
         rid = store.create(config)
         manager = Manager(store)
         manager.start(rid)

@@ -208,3 +208,93 @@ def test_dns_miss_is_retried_before_failing(monkeypatch):
     with pytest.raises(FetchError, match="DNS resolution failed"):
         resolve("nowhere.invalid", pause=0)
     assert len(calls) == 3
+
+
+def test_dns_answer_is_reused_when_a_later_lookup_misses(monkeypatch):
+    import socket as _socket
+
+    from attorneyscraper import fetch as fetch_mod
+
+    fetch_mod._dns_cache.clear()
+    state = {"fail": False}
+
+    def resolver(host, port, type=None):
+        if state["fail"]:
+            raise _socket.gaierror(11001, "getaddrinfo failed")
+        return [(None, None, None, None, ("216.157.108.97", port))]
+
+    monkeypatch.setattr(_socket, "getaddrinfo", resolver)
+    assert fetch_mod.resolve("www.bricker.com", pause=0) == ["216.157.108.97"]
+    state["fail"] = True  # the resolver starts missing mid-crawl
+    assert fetch_mod.resolve("www.bricker.com", pause=0) == ["216.157.108.97"]
+    # A host never resolved still fails, and a stale answer is not trusted forever.
+    with pytest.raises(FetchError, match="DNS resolution failed"):
+        fetch_mod.resolve("never.seen.invalid", pause=0)
+    monkeypatch.setattr(fetch_mod.time, "monotonic", lambda: 10**6)
+    with pytest.raises(FetchError, match="DNS resolution failed"):
+        fetch_mod.resolve("www.bricker.com", pause=0)
+    fetch_mod._dns_cache.clear()
+
+
+class FakeRenderer:
+    """Stands in for Chromium: the firewall lets a browser through."""
+
+    def __init__(self, status=200, url="https://firm.com/attorneys/", html=None, ctype="text/html"):
+        from attorneyscraper.render import BrowserResponse
+
+        self.calls = []
+        self._response = BrowserResponse(status, url, html if html is not None else
+                                         "<main><h1>Our Attorneys</h1><p>Jane Smith, Attorney</p></main>", ctype)
+
+    def fetch(self, url):
+        self.calls.append(url)
+        return self._response
+
+    def close(self):
+        pass
+
+
+def test_firewall_403_falls_back_to_the_browser():
+    # hallrender.com and hccw.com answer 403 to every non-browser client.
+    f = make(lambda req: httpx.Response(404) if req.url.path == "/robots.txt" else httpx.Response(403))
+    f.wait = lambda s: None
+    f.render = "auto"
+    f._renderer = FakeRenderer()
+    page = f.get("https://firm.com/attorneys/", "firm.com")
+    assert page.status == 200 and "Our Attorneys" in page.text
+    assert f._renderer.calls == ["https://firm.com/attorneys/"]
+    f.close()
+
+
+def test_browser_fallback_is_off_by_default_and_respects_robots():
+    f = make(lambda req: httpx.Response(404) if req.url.path == "/robots.txt" else httpx.Response(403))
+    f.wait = lambda s: None
+    f._renderer = FakeRenderer()
+    with pytest.raises(FetchError, match="HTTP 403"):  # render="never"
+        f.get("https://firm.com/attorneys/", "firm.com")
+    assert f._renderer.calls == []
+    f.close()
+
+    def handler(req):
+        if req.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /attorneys", headers={"content-type": "text/plain"})
+        return httpx.Response(403)
+
+    g = make(handler)
+    g.wait = lambda s: None
+    g.render = "auto"
+    g._renderer = FakeRenderer()
+    with pytest.raises(FetchError, match="Blocked by robots.txt"):
+        g.get("https://firm.com/attorneys/", "firm.com")
+    assert g._renderer.calls == []  # robots still decides, browser or not
+    g.close()
+
+
+def test_browser_off_site_redirect_is_blocked():
+    f = make(lambda req: httpx.Response(404) if req.url.path == "/robots.txt" else httpx.Response(403))
+    f.wait = lambda s: None
+    f.render = "auto"
+    f._renderer = FakeRenderer(url="https://elsewhere.example/attorneys/")
+    with pytest.raises(FetchError, match="Off-site redirect blocked"):
+        f.get("https://firm.com/attorneys/", "firm.com")
+    f.close()

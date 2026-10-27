@@ -4,6 +4,9 @@ py -3.12 -m venv .venv
 if errorlevel 1 goto fail
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 if errorlevel 1 goto fail
+REM Chromium is used only for sites whose firewall refuses non-browser clients.
+.venv\Scripts\python.exe -m playwright install chromium
+if errorlevel 1 goto fail
 .venv\Scripts\python.exe -m pytest -q
 if errorlevel 1 goto fail
 echo Setup and automated tests completed. Run run_ui.bat to open the platform.

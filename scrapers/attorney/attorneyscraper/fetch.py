@@ -41,18 +41,38 @@ class Stopped(FetchError):
     pass
 
 
+_dns_cache: dict[tuple[str, int], tuple[float, list[str]]] = {}
+_dns_lock = threading.Lock()
+DNS_TTL = 900.0  # seconds a good answer is trusted after a later lookup fails
+
+
 def resolve(host: str, port: int = 443, attempts: int = 3, pause: float = 0.5) -> list[str]:
-    """Addresses for ``host``. Home and office resolvers miss intermittently (a 0.3 s failure
-    followed by a clean answer moments later), so one miss is retried before it counts."""
+    """Addresses for ``host``.
+
+    Consumer and office resolvers miss intermittently: www.bricker.com answered
+    NXDOMAIN once in the middle of a crawl that had already fetched a hundred of
+    its pages. A miss is retried, and an answer that worked within DNS_TTL is
+    reused rather than letting one bad reply end the site.
+    """
+    key = (host, port)
+    last: OSError | None = None
     for attempt in range(attempts):
         try:
             answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-            return list(dict.fromkeys(a[4][0] for a in answers))
+            addresses = list(dict.fromkeys(a[4][0] for a in answers))
+            if addresses:
+                with _dns_lock:
+                    _dns_cache[key] = (time.monotonic(), addresses)
+                return addresses
         except OSError as exc:
-            if attempt == attempts - 1:
-                raise FetchError(f"DNS resolution failed ({exc.errno or exc})") from exc
+            last = exc
+        if attempt < attempts - 1:
             time.sleep(pause * (attempt + 1))
-    return []
+    with _dns_lock:
+        cached = _dns_cache.get(key)
+    if cached and time.monotonic() - cached[0] < DNS_TTL:
+        return cached[1]
+    raise FetchError(f"DNS resolution failed ({getattr(last, 'errno', None) or last})")
 
 
 def public_url(url: str):
@@ -151,11 +171,19 @@ class Page:
     content_type: str
 
 
+BLOCK_CODES = {401, 403, 429, 503}
+
+
 class Fetcher:
-    def __init__(self, delay=1.5, stop=None, transport=None, validate=public_url):
+    def __init__(self, delay=1.5, stop=None, transport=None, validate=public_url, render="never"):
         self.delay = delay
         self.stop = stop or threading.Event()
         self.validate = validate
+        # "never" (the default, and what the tests use), "auto" = browser only after a
+        # firewall block, "always" = every page through the browser.
+        self.render = render
+        self._renderer = None
+        self._renderer_error: str | None = None
         self.client = httpx.Client(
             timeout=httpx.Timeout(20, connect=10),
             follow_redirects=False,
@@ -167,6 +195,36 @@ class Fetcher:
 
     def close(self):
         self.client.close()
+        if self._renderer is not None:
+            try:
+                self._renderer.close()
+            finally:
+                self._renderer = None
+
+    def browser_ready(self) -> bool:
+        if self.render == "never":
+            return False
+        if self._renderer is None and self._renderer_error is None:
+            try:
+                from .render import BrowserRenderer
+
+                self._renderer = BrowserRenderer()
+            except Exception as exc:  # BrowserUnavailable, or no display
+                self._renderer_error = str(exc)
+        return self._renderer is not None
+
+    def browser_get(self, url, allowed_site) -> Page | None:
+        """Fetch one URL through Chromium. The same URL and redirect rules apply."""
+        if not self.browser_ready():
+            return None
+        self.validate(url)
+        try:
+            result = self._renderer.fetch(url)
+        except Exception as exc:
+            raise FetchError(f"Browser fetch failed: {type(exc).__name__}") from exc
+        if site_key(result.url) != allowed_site:
+            raise FetchError("Off-site redirect blocked")
+        return Page(result.url, result.status, result.text, result.content_type)
 
     def wait(self, seconds):
         if self.stop.wait(max(0, seconds)):
@@ -238,9 +296,10 @@ class Fetcher:
         if site_key(url) != allowed_site:
             raise FetchError("Off-site request blocked")
         if p.netloc not in self.policies:
-            response = self._raw(
-                f"{p.scheme}://{p.netloc}/robots.txt", allowed_site, robots=True
-            )
+            robots_url = f"{p.scheme}://{p.netloc}/robots.txt"
+            response = self._raw(robots_url, allowed_site, robots=True)
+            if response.status in BLOCK_CODES and self.render != "never":
+                response = self.browser_get(robots_url, allowed_site) or response
             if 400 <= response.status < 500 and response.status != 429:
                 # RFC 9309 2.3.1.3: a 4xx robots.txt means no robots file; crawling is permitted.
                 policy = Robots("")
@@ -257,7 +316,14 @@ class Fetcher:
         policy = self.policy(url, allowed_site)
         if not policy.allowed(url):
             raise FetchError("Blocked by robots.txt")
-        page = self._raw(url, allowed_site)
+        if self.render == "always" and self.browser_ready():
+            page = self.browser_get(url, allowed_site) or self._raw(url, allowed_site)
+        else:
+            page = self._raw(url, allowed_site)
+            if page.status in BLOCK_CODES and self.render != "never":
+                # hallrender.com and hccw.com refuse any non-browser client; the same
+                # public page loads in Chromium. robots.txt was already honoured above.
+                page = self.browser_get(url, allowed_site) or page
         if page.status != 200:
             raise FetchError(f"HTTP {page.status}")
         if not any(

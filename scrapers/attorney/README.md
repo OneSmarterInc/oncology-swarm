@@ -51,7 +51,11 @@ Use **Run again** to refresh old records after extraction fixes. Previously stor
 .\.venv\Scripts\python.exe scripts\ui_test.py
 ```
 
-The browser test uses a real temporary FastAPI/SQLite instance with deterministic upstream responses. It checks desktop/mobile layouts, creation, uploads, filters, exports, pause/resume, race conditions and HTML injection. Playwright is needed for browser testing, not for normal scraping.
+The browser test uses a real temporary FastAPI/SQLite instance with deterministic upstream responses. It checks desktop/mobile layouts, creation, uploads, filters, exports, pause/resume, race conditions and HTML injection.
+
+## Sites that refuse non-browser clients
+
+Some firm sites (hallrender.com, hccw.com) answer 403 to any plain HTTP client, whatever User-Agent it sends, because the block is on the TLS fingerprint. A run uses Chromium for those pages and only those: `render` is `auto` by default, `never` turns the fallback off, `always` puts every page through the browser. robots.txt is read and obeyed exactly as before, and an off-site redirect is still refused. Install the browser once with `.\.venv\Scripts\python.exe -m playwright install chromium` (setup_windows.bat does this).
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\load_test.py

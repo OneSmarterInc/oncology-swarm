@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -66,6 +67,8 @@ class RunConfig(BaseModel):
     max_depth: int = Field(default=4, ge=0, le=8)
     parallel_sites: int = Field(default=3, ge=1, le=8)
     delay: float = Field(default=1.5, ge=0.5, le=60)
+    # "auto" uses Chromium only for a site whose firewall blocks the plain client.
+    render: Literal["never", "auto", "always"] = "auto"
     categories: list[str] = Field(default_factory=lambda: list(CATEGORIES))
 
     @field_validator("categories")
