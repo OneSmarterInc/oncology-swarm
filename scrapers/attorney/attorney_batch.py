@@ -5,7 +5,6 @@
 Same pipeline as the portal upload (parse_sources -> RunConfig -> Manager -> workbook_bytes).
 """
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -42,10 +41,19 @@ def main() -> None:
             manager.close()
         run = store.get(rid)
         records = store.records(rid)
-        Path(args.out).write_bytes(workbook_bytes(records, run, store.pages(rid), store.audit(rid)))
-    print(json.dumps({"run": rid, "status": run["status"], "people": len(records),
-                      "sites": [(s["host"], s["status"], s.get("reason", "")) for s in run["sites"]]}, indent=2))
-    print(f"Excel: {Path(args.out).resolve()}")
+        pages = store.pages(rid)
+        Path(args.out).write_bytes(workbook_bytes(records, run, pages, store.audit(rid)))
+    print(f"\nRun {rid}: {run['status']} — {len(records)} people")
+    failures = {}
+    for page in pages:
+        if page["status"] == "error" and page["host"] not in failures:
+            failures[page["host"]] = f"{page['note']}  ({page['url']})"
+    for site in run["sites"]:
+        line = f"  {site['host']:<28} {site['status']:<10} {site.get('reason', '')}"
+        if site["status"] in {"error", "limited"} and site["host"] in failures:
+            line += f"\n      first error: {failures[site['host']]}"
+        print(line)
+    print(f"\nExcel: {Path(args.out).resolve()}")
 
 
 if __name__ == "__main__":
