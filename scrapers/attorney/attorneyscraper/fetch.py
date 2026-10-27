@@ -41,17 +41,26 @@ class Stopped(FetchError):
     pass
 
 
+def resolve(host: str, port: int = 443, attempts: int = 3, pause: float = 0.5) -> list[str]:
+    """Addresses for ``host``. Home and office resolvers miss intermittently (a 0.3 s failure
+    followed by a clean answer moments later), so one miss is retried before it counts."""
+    for attempt in range(attempts):
+        try:
+            answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            return list(dict.fromkeys(a[4][0] for a in answers))
+        except OSError as exc:
+            if attempt == attempts - 1:
+                raise FetchError(f"DNS resolution failed ({exc.errno or exc})") from exc
+            time.sleep(pause * (attempt + 1))
+    return []
+
+
 def public_url(url: str):
     url = canonical_url(url)
     host = urlsplit(url).hostname
     if host == "localhost" or host.endswith((".local", ".internal", ".localhost")):
         raise FetchError("Private/local hosts are not allowed")
-    try:
-        addresses = {
-            a[4][0] for a in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        }
-    except OSError as e:
-        raise FetchError("DNS resolution failed") from e
+    addresses = set(resolve(host))
     if not addresses or any(
         (not ipaddress.ip_address(a).is_global or ipaddress.ip_address(a).is_multicast)
         for a in addresses

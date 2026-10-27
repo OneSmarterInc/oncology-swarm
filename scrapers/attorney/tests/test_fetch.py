@@ -180,3 +180,31 @@ def test_requests_carry_browser_headers_and_robots_group_stays_named():
     policy = Robots("User-agent: *\nAllow: /\nUser-agent: AttorneyResearchBot\nDisallow: /attorneys/")
     assert AGENT.startswith("AttorneyResearchBot") and not policy.allowed("https://firm.com/attorneys/x")
     f.close()
+
+
+def test_dns_miss_is_retried_before_failing(monkeypatch):
+    import socket as _socket
+
+    from attorneyscraper.fetch import resolve
+
+    calls = []
+
+    def flaky(host, port, type=None):
+        calls.append(host)
+        if len(calls) < 3:
+            raise _socket.gaierror(11001, "getaddrinfo failed")
+        return [(None, None, None, None, ("162.159.134.42", port))]
+
+    monkeypatch.setattr(_socket, "getaddrinfo", flaky)
+    assert resolve("www.hccw.com", pause=0) == ["162.159.134.42"]
+    assert len(calls) == 3
+    calls.clear()
+
+    def dead(host, port, type=None):
+        calls.append(host)
+        raise _socket.gaierror(11001, "getaddrinfo failed")
+
+    monkeypatch.setattr(_socket, "getaddrinfo", dead)
+    with pytest.raises(FetchError, match="DNS resolution failed"):
+        resolve("nowhere.invalid", pause=0)
+    assert len(calls) == 3

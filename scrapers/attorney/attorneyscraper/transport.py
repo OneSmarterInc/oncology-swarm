@@ -30,11 +30,12 @@ class PublicBackend(httpcore.SyncBackend):
     def connect_tcp(
         self, host, port, timeout=None, local_address=None, socket_options=None
     ):
+        from .fetch import FetchError, resolve
+
         try:
-            answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-        except OSError as exc:
-            raise httpcore.ConnectError("DNS resolution failed") from exc
-        addresses = list(dict.fromkeys(a[4][0] for a in answers))
+            addresses = resolve(host, port)
+        except FetchError as exc:
+            raise httpcore.ConnectError(str(exc)) from exc
         if not addresses or any(
             (
                 not ipaddress.ip_address(ip).is_global
