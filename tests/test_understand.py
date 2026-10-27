@@ -82,3 +82,39 @@ def test_model_fills_gaps_but_cannot_invent():
 def test_model_down_falls_back_to_rules():
     r, notes = understand("cancer hospitals in mumbai", Model(error=ConnectionError("ollama off")))
     assert r.location == "Mumbai" and any("built-in reader" in n for n in notes)
+
+
+def test_model_cannot_turn_the_whole_prompt_into_a_hospital_name():
+    """The 'top 10 cancer hospitals in Mumbai' run: 40 sites checked, 0 kept.
+
+    qwen3:0.6b answered that the prompt itself was the hospital named, so Apollo,
+    Hinduja, Manipal, HCG and Medanta were each rejected as 'not one of the
+    hospitals you named'.
+    """
+    reading = ModelReading(hospital_names=["top 10 cancer hospitals in Mumbai"],
+                           excluded_cities=["Mumbai"], cities=[])
+    r, notes = understand("top 10 cancer hospitals in Mumbai", Model(reading))
+    d = r.as_dict()
+    assert d["names"] == []                      # the prompt is not a hospital
+    assert d["locations"] == ["Mumbai"]          # and Mumbai is where to look
+    assert d["excluded_locations"] == []         # not a place to avoid
+    assert r.location == "Mumbai" and d["kind"] == "cancer" and d["count"] == 10
+    assert any("names no hospital" in n for n in notes)
+    assert any("the prompt does not" in n for n in notes)
+
+
+def test_model_may_still_add_a_real_name_and_a_real_exclusion():
+    reading = ModelReading(hospital_names=["Kokilaben Dhirubhai Ambani Hospital"])
+    d = understand("oncologists at kokilaben dhirubhai ambani hospital in mumbai", Model(reading))[0].as_dict()
+    assert "Kokilaben Dhirubhai Ambani Hospital" in d["names"]
+    # An exclusion the user really wrote is still honoured.
+    reading = ModelReading(excluded_cities=["Navi Mumbai"], cities=["Mumbai"])
+    d = understand("cancer hospitals in mumbai except navi mumbai", Model(reading))[0].as_dict()
+    assert d["locations"] == ["Mumbai"] and d["excluded_locations"] == ["Navi Mumbai"]
+
+
+def test_a_brand_the_model_offers_is_kept():
+    for brand in ("AIIMS", "Tata Memorial Hospital", "Apollo"):
+        reading = ModelReading(hospital_names=[brand])
+        d = understand(f"oncologists of {brand} in delhi", Model(reading))[0].as_dict()
+        assert brand in d["names"], brand
