@@ -394,3 +394,26 @@ def test_doctor_finders_tourism_agents_and_research_sites_are_not_sources(url):
 def test_slogans_are_not_hospital_names(title, ok):
     from oncoscraper.site_discovery import _good_name
     assert bool(_good_name(title)) is ok
+
+
+def test_a_run_that_finds_nothing_says_why_and_what_to_change():
+    from oncoscraper.site_discovery import Rejected, rejection_summary
+
+    rejected = [Rejected(f"h{i}.example", "No page on this site listed oncologists that the extractor could read")
+                for i in range(32)]
+    rejected += [Rejected("a.example", "Site says Delhi, not Mumbai"),
+                 Rejected("b.example", "Site never states Mumbai"),
+                 Rejected("c.example", "The site answered too slowly: 1 page(s) in 60 seconds")]
+    lines = rejection_summary(rejected)
+    assert "32 no doctor page the extractor could read" in lines[0]
+    assert "2 site is in another place" in lines[0]
+    assert "1 site too slow for the per-site budget" in lines[0]
+    assert "Pages read per site" in lines[1]  # the hint names the setting to raise
+    assert rejection_summary([]) == []
+
+
+def test_rejection_summary_hint_follows_the_biggest_group():
+    from oncoscraper.site_discovery import Rejected, rejection_summary
+
+    lines = rejection_summary([Rejected("a.example", "Site says Pune, not Mumbai")] * 3)
+    assert "site is in another place" in lines[0] and "Name the city" in lines[1]

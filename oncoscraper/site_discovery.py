@@ -428,7 +428,56 @@ def discover_hospitals(search, make_crawler, want=10, kind="", location="", targ
     if len(hospitals) < want:
         notes.append(f"Requested {want} hospitals; {len(hospitals)} had {target} pages this run could verify "
                      f"({len(hosts)} sites checked, {len(rejected)} did not qualify)")
+        notes.extend(rejection_summary(rejected))
     return hospitals[:want], rejected, notes
+
+
+def rejection_summary(rejected, top=4):
+    """Why the sites did not qualify, grouped, so a run that finds nothing says what to change."""
+    if not rejected:
+        return []
+    groups = Counter(_reason_group(r.reason) for r in rejected)
+    lines = [f"Why sites did not qualify: " + "; ".join(
+        f"{count} {reason}" for reason, count in groups.most_common(top))]
+    biggest = groups.most_common(1)[0][0]
+    hint = REJECTION_HINTS.get(biggest)
+    if hint:
+        lines.append(hint)
+    return lines
+
+
+def _reason_group(reason: str) -> str:
+    text = (reason or "").strip()
+    for pattern, label in (
+        (r"^No page on this site listed", "no doctor page the extractor could read"),
+        (r"^No hospital name found", "no hospital name on the site"),
+        (r"^The site answered too slowly", "site too slow for the per-site budget"),
+        (r"^Home page could not be read", "home page could not be read"),
+        (r"^Site could not be read", "site could not be read"),
+        (r"^Site says |^Site never states ", "site is in another place"),
+        (r"^Nothing on this site shows", "site is not that kind of hospital"),
+        (r"is not one of the hospitals you named", "not one of the named hospitals"),
+        (r"^You asked to leave out", "excluded by your prompt"),
+        (r"^Same hospital as one already found", "duplicate of a hospital already found"),
+    ):
+        if re.search(pattern, text):
+            return label
+    return text[:60]
+
+
+REJECTION_HINTS = {
+    "no doctor page the extractor could read":
+        "Most sites were reachable but their doctor list was not found within the per-site page budget. "
+        "Raise 'Pages read per site while checking' and 'Seconds per site', or set 'JavaScript pages' to "
+        "Always for sites that build their doctor list in the browser.",
+    "site too slow for the per-site budget":
+        "Raise 'Seconds per site'.",
+    "site is in another place":
+        "The sites found serve other cities. Name the city exactly, or widen the place in your prompt.",
+    "site is not that kind of hospital":
+        "The kind word in your prompt (for example 'government' or 'cancer') was never shown on these sites. "
+        "Drop it to widen the search.",
+}
 
 
 def sources_from_hospitals(hospitals):
