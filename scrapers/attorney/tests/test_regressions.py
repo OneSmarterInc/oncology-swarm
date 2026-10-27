@@ -219,3 +219,50 @@ def test_excel_phone_cells_have_no_apostrophe(tmp_path):
     row = dict(zip([c.value for c in ws[1]], [c.value for c in ws[2]]))
     assert row["Individual phone"] == "+1 212-555-2345"
     assert "'+1 212-555-2345" in csv_bytes([record]).decode("utf-8-sig")  # CSV keeps the formula guard
+
+
+def test_one_person_is_one_row_across_languages_and_the_directory_page(tmp_path):
+    """fuchsberg.com returned Alan Fuchsberg four times: card, page, and both in Spanish."""
+    from attorneyscraper.models import RunConfig, person_key, without_language
+    from attorneyscraper.store import Store
+
+    base = "https://www.fuchsberg.com"
+    assert without_language(f"{base}/es/attorneys/alan-l-fuchsberg") == f"{base}/attorneys/alan-l-fuchsberg"
+    assert person_key("Alan Fuchsberg", f"{base}/es/attorneys/alan-l-fuchsberg") == \
+           person_key("Alan Fuchsberg", f"{base}/attorneys/alan-l-fuchsberg")
+    # A real section is not mistaken for a language.
+    assert without_language(f"{base}/practice-areas/malpractice") == f"{base}/practice-areas/malpractice"
+
+    store = Store(tmp_path / "t.db")
+    with store.owner:
+        rid = store.create(RunConfig(name="dupes", sources=[{"organization": "Fuchsberg", "url": base + "/"}]))
+        seen = [
+            (f"{base}/attorneys", f"{base}/attorneys", False, "Managing Partner", []),
+            (f"{base}/attorneys/alan-l-fuchsberg", f"{base}/attorneys/alan-l-fuchsberg", True, "Attorney",
+             [{"kind": "email", "value": "alan@fuchsberg.com", "owner": "individual",
+               "source_url": f"{base}/attorneys/alan-l-fuchsberg", "evidence": "Email alan@fuchsberg.com"}]),
+            (f"{base}/es/attorneys", f"{base}/es/attorneys", False, "", []),
+            (f"{base}/es/attorneys/alan-l-fuchsberg", f"{base}/es/attorneys/alan-l-fuchsberg", True, "", []),
+        ]
+        for source_url, profile_url, is_profile, title, contacts in seen:
+            page = {"run_id": rid, "url": source_url, "host": "fuchsberg.com", "depth": 0, "id": None}
+            with store.db() as db:
+                db.execute("INSERT OR IGNORE INTO pages(run_id,host,url,depth,priority) VALUES(?,?,?,?,?)",
+                           (rid, "fuchsberg.com", source_url, 0, 50))
+                page["id"] = db.execute("SELECT id FROM pages WHERE run_id=? AND url=?",
+                                        (rid, source_url)).fetchone()["id"]
+            store.finish_page(page, {"records": [{
+                "key": person_key("Alan Fuchsberg", profile_url), "name": "Alan Fuchsberg",
+                "organization": "The Fuchsberg Law Firm", "title": title, "categories": [],
+                "client_side": [], "contacts": contacts, "city": "New York", "state": "NY",
+                "profile_url": profile_url, "source_url": source_url, "is_profile": is_profile,
+                "status": "confirmed", "attorney_evidence": ["Attorney"], "classification_evidence": {},
+                "observed_at": "2026-10-27T00:00:00+00:00",
+            }]})
+        people = [p for p in store.records(rid) if p["name"] == "Alan Fuchsberg"]
+    assert len(people) == 1, [p["profile_url"] for p in people]
+    kept = people[0]
+    assert kept["profile_url"] == f"{base}/attorneys/alan-l-fuchsberg"   # the person's own page wins
+    assert kept["title"] == "Attorney"
+    assert any(c["value"] == "alan@fuchsberg.com" for c in kept["contacts"])
+    assert f"{base}/attorneys" in kept["evidence_urls"]                  # the card is kept as evidence

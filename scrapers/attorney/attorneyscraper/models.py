@@ -103,6 +103,24 @@ class Review(BaseModel):
         return v
 
 
+# A first path segment that is a language, not a section: /es/attorneys/jane is the
+# same page as /attorneys/jane. Without this a bilingual firm lists everyone twice.
+LANGUAGE_SEGMENT = re.compile(
+    r"^(?:en|es|fr|de|it|pt|nl|pl|sv|da|fi|no|cs|el|hu|ro|tr|ru|uk|ar|he|fa|hi|bn|ta|te|mr|gu|kn|ml|pa|ur|"
+    r"zh|ja|ko|th|vi|id|ms|tl)(?:[-_][a-z]{2,4})?$",
+    re.I,
+)
+
+
+def without_language(url: str) -> str:
+    """The URL with a leading language segment removed, for comparing two copies of a page."""
+    parts = urlsplit(canonical_url(url))
+    segments = parts.path.split("/")
+    if len(segments) > 2 and LANGUAGE_SEGMENT.match(segments[1] or ""):
+        parts = parts._replace(path="/" + "/".join(segments[2:]))
+    return urlunsplit(parts).rstrip("/")
+
+
 def person_key(name: str, url: str) -> str:
     # Different profile URLs preserve homonyms instead of merging on name alone.
     return (
@@ -110,5 +128,5 @@ def person_key(name: str, url: str) -> str:
         + "|"
         + re.sub(r"[^\w]", "", name.casefold())
         + "|"
-        + canonical_url(url).rstrip("/")
+        + without_language(url)
     )

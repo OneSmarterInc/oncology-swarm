@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -11,12 +12,48 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import RunConfig, site_key
+from .models import RunConfig, canonical_url, site_key, without_language
 from .security import DatabaseOwner
 
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _fold_listing_cards(grouped):
+    """One person listed on a directory page and again on their own page is one person.
+
+    A card on /attorneys that carries no link of its own keys to /attorneys, while the
+    person's page keys to /attorneys/their-name, so the two never met: fuchsberg.com
+    returned Alan Fuchsberg twice. The card is folded into the page when the same name
+    on the same site has one, keeping the card's contacts and evidence.
+    """
+    by_person = {}
+    for (run, key), person in grouped.items():
+        name = re.sub(r"[^a-z]", "", str(person.get("name") or "").casefold())
+        if name:
+            by_person.setdefault((run, site_key(person["profile_url"]), name), []).append((run, key))
+    drop = set()
+    for keys in by_person.values():
+        if len(keys) < 2:
+            continue
+        pages = [k for k in keys if grouped[k]["is_profile"]]
+        cards = [k for k in keys if not grouped[k]["is_profile"]]
+        if len(pages) != 1 or not cards:
+            continue  # two real pages are two people, or homonyms: leave them alone
+        page = grouped[pages[0]]
+        for card_key in cards:
+            card = grouped[card_key]
+            page["contacts"] = list(
+                {(c["kind"], c["value"], c["owner"], c["source_url"]): c
+                 for c in page["contacts"] + card["contacts"]}.values()
+            )
+            page["evidence_urls"] = sorted(set(page["evidence_urls"] + card["evidence_urls"]))
+            for field in ("title", "city", "state"):
+                if not page.get(field) and card.get(field):
+                    page[field] = card[field]
+            drop.add(card_key)
+    return {k: v for k, v in grouped.items() if k not in drop}
 
 
 class Store:
@@ -361,7 +398,12 @@ class Store:
                 combined = old["contacts"] + p["contacts"]
                 evidence_urls = sorted(set(old["evidence_urls"] + [p["source_url"]]))
                 # Profile evidence outranks listing evidence. Do not union firm-wide specialties.
-                if p["is_profile"] or not old["is_profile"]:
+                # Between two copies of one page, the one without a /es/ style prefix is the address to keep.
+                translated = without_language(p["profile_url"]) != canonical_url(p["profile_url"]).rstrip("/")
+                already_plain = without_language(old["profile_url"]) == canonical_url(old["profile_url"]).rstrip("/")
+                if (p["is_profile"] or not old["is_profile"]) and not (
+                    translated and already_plain and p["is_profile"] == old["is_profile"]
+                ):
                     grouped[key] = p
                 grouped[key]["contacts"] = list(
                     {
@@ -370,6 +412,7 @@ class Store:
                     }.values()
                 )
                 grouped[key]["evidence_urls"] = evidence_urls
+        grouped = _fold_listing_cards(grouped)
         owners = {}
         for (run, key), p in grouped.items():
             for c in p["contacts"]:
