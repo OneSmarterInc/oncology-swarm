@@ -298,3 +298,25 @@ def test_browser_off_site_redirect_is_blocked():
     with pytest.raises(FetchError, match="Off-site redirect blocked"):
         f.get("https://firm.com/attorneys/", "firm.com")
     f.close()
+
+
+def test_a_blocked_host_skips_the_doomed_plain_request_next_time():
+    plain = []
+
+    def handler(req):
+        if req.url.path == "/robots.txt":
+            return httpx.Response(404)
+        plain.append(req.url.path)
+        return httpx.Response(403)
+
+    f = make(handler)
+    f.wait = lambda s: None
+    f.render = "auto"
+    f._renderer = FakeRenderer()
+    assert f.get("https://firm.com/attorneys/", "firm.com").status == 200
+    assert plain == ["/attorneys/"]
+    f._renderer._response.url = "https://firm.com/people/jane"
+    assert f.get("https://firm.com/people/jane", "firm.com").status == 200
+    assert plain == ["/attorneys/"]  # second page went straight to the browser
+    assert f._renderer.calls == ["https://firm.com/attorneys/", "https://firm.com/people/jane"]
+    f.close()

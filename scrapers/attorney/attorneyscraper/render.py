@@ -82,6 +82,7 @@ class BrowserRenderer:
             lambda route: route.abort(),
         )
         self._timeout = int(timeout_seconds * 1000)
+        self._idle_timeout = 4000
 
     def fetch(self, url: str) -> BrowserResponse:
         page = self._context.new_page()
@@ -92,15 +93,24 @@ class BrowserRenderer:
             if ctype.startswith("text/plain") or url.endswith("robots.txt"):
                 body = response.text() if response else ""
                 return BrowserResponse(status, page.url, body[:MAX_CHARS], ctype or "text/plain")
-            # A firewall interstitial usually clears itself within a few seconds.
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and CHALLENGE.search(page.content()[:30000]):
-                page.wait_for_timeout(1000)
-                status = 200
-            try:
-                page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                pass
+            html = page.content()
+            # A firewall interstitial usually clears itself within a few seconds. Only a page
+            # that is actually showing one is waited on; every other page continues at once.
+            if CHALLENGE.search(html[:30000]):
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline and CHALLENGE.search(page.content()[:30000]):
+                    page.wait_for_timeout(1000)
+                    status = 200
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+            elif not has_content(html):
+                # An app shell that still has to fetch its content; a short settle is enough.
+                try:
+                    page.wait_for_load_state("networkidle", timeout=self._idle_timeout)
+                except Exception:
+                    pass
             html = page.content()
             if status in BLOCK_CODES and not CHALLENGE.search(html[:30000]) and has_content(html):
                 status = 200  # the interstitial passed; this is the real document

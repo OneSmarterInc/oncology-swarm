@@ -184,6 +184,9 @@ class Fetcher:
         self.render = render
         self._renderer = None
         self._renderer_error: str | None = None
+        # Hosts that answered a block code to the plain client: go straight to the
+        # browser for the rest of the run instead of paying for a refusal each time.
+        self._browser_only: set[str] = set()
         self.client = httpx.Client(
             timeout=httpx.Timeout(20, connect=10),
             follow_redirects=False,
@@ -316,14 +319,20 @@ class Fetcher:
         policy = self.policy(url, allowed_site)
         if not policy.allowed(url):
             raise FetchError("Blocked by robots.txt")
-        if self.render == "always" and self.browser_ready():
+        host = urlsplit(url).netloc
+        skip_plain = self.render == "always" or host in self._browser_only
+        if skip_plain and self.browser_ready():
             page = self.browser_get(url, allowed_site) or self._raw(url, allowed_site)
         else:
             page = self._raw(url, allowed_site)
             if page.status in BLOCK_CODES and self.render != "never":
                 # hallrender.com and hccw.com refuse any non-browser client; the same
                 # public page loads in Chromium. robots.txt was already honoured above.
-                page = self.browser_get(url, allowed_site) or page
+                rendered = self.browser_get(url, allowed_site)
+                if rendered is not None:
+                    if rendered.status == 200:
+                        self._browser_only.add(host)
+                    page = rendered
         if page.status != 200:
             raise FetchError(f"HTTP {page.status}")
         if not any(
